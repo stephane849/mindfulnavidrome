@@ -8,6 +8,9 @@ import android.graphics.Color
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaControllerCompat
@@ -23,6 +26,18 @@ import android.widget.*
  * screen does not stop the music.
  */
 class MainActivity : Activity() {
+
+    companion object {
+        /** Title of the mode picker at the top of the browse tree. */
+        private const val ROOT_TITLE = "Library"
+
+        /**
+         * How often the elapsed-time readout refreshes while playing. Coarse on
+         * purpose: a ticking clock is exactly the kind of repeated partial
+         * redraw that ghosts on E-Ink.
+         */
+        private const val TICK_MS = 15_000L
+    }
 
     private lateinit var browser: MediaBrowserCompat
     private var controller: MediaControllerCompat? = null
@@ -40,13 +55,22 @@ class MainActivity : Activity() {
     private lateinit var browseList: ListView
     private lateinit var nowPlaying: TextView
     private lateinit var buttonPrev: Button
+    private lateinit var buttonRewind: Button
     private lateinit var buttonPlayPause: Button
+    private lateinit var buttonForward: Button
     private lateinit var buttonNext: Button
 
     /** Breadcrumb of (mediaId, screen title) - last entry is what is on screen. */
     private val stack = mutableListOf<Pair<String, String>>()
     private var rows: List<MediaBrowserCompat.MediaItem> = emptyList()
     private var playingMediaId: String? = null
+
+    private val tickHandler = Handler(Looper.getMainLooper())
+    private val positionTick = object : Runnable {
+        override fun run() {
+            renderTransport(controller?.playbackState, controller?.metadata)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,13 +91,17 @@ class MainActivity : Activity() {
         browseList = findViewById(R.id.browse_list)
         nowPlaying = findViewById(R.id.now_playing)
         buttonPrev = findViewById(R.id.button_prev)
+        buttonRewind = findViewById(R.id.button_rewind)
         buttonPlayPause = findViewById(R.id.button_play_pause)
+        buttonForward = findViewById(R.id.button_forward)
         buttonNext = findViewById(R.id.button_next)
 
         buttonConnect.setOnClickListener { onConnectClicked() }
         buttonBack.setOnClickListener { goUp() }
         buttonPrev.setOnClickListener { controller?.transportControls?.skipToPrevious() }
         buttonNext.setOnClickListener { controller?.transportControls?.skipToNext() }
+        buttonRewind.setOnClickListener { controller?.transportControls?.rewind() }
+        buttonForward.setOnClickListener { controller?.transportControls?.fastForward() }
         buttonPlayPause.setOnClickListener { togglePlayPause() }
         browseList.setOnItemClickListener { _, _, position, _ -> onRowTapped(position) }
 
@@ -107,6 +135,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+        tickHandler.removeCallbacks(positionTick)
         controller?.unregisterCallback(controllerCallback)
         if (stack.isNotEmpty()) browser.unsubscribe(stack.last().first)
         browser.disconnect()
@@ -124,7 +153,7 @@ class MainActivity : Activity() {
             renderTransport(ctrl.playbackState, ctrl.metadata)
 
             if (api.isConfigured()) {
-                if (stack.isEmpty()) stack.add(MusicService.MEDIA_ID_ROOT to "Artists")
+                if (stack.isEmpty()) stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
                 subscribeCurrent()
             }
         }
@@ -161,7 +190,7 @@ class MainActivity : Activity() {
         }
 
         override fun onError(parentId: String) {
-            textTitle.text = stack.lastOrNull()?.second ?: "Artists"
+            textTitle.text = stack.lastOrNull()?.second ?: ROOT_TITLE
             if (!api.isConfigured()) {
                 showLoginPanel("Enter your server details")
             } else {
@@ -176,7 +205,6 @@ class MainActivity : Activity() {
 
     private fun subscribeCurrent() {
         val (mediaId, title) = stack.last()
-        textTitle.text = "Loading"
         rows = emptyList()
         browseList.adapter = RowAdapter(emptyList())
         buttonBack.visibility = if (stack.size > 1) View.VISIBLE else View.GONE
@@ -230,7 +258,7 @@ class MainActivity : Activity() {
 
         showBrowsePanel()
         stack.clear()
-        stack.add(MusicService.MEDIA_ID_ROOT to "Artists")
+        stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
         if (browser.isConnected) subscribeCurrent() else browser.connect()
     }
 
@@ -256,18 +284,40 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * The session only publishes a position when the state changes, so between
+     * updates it has to be extrapolated from the wall clock.
+     */
+    private fun elapsedMs(state: PlaybackStateCompat?): Long {
+        if (state == null) return 0L
+        var position = state.position
+        if (state.state == PlaybackStateCompat.STATE_PLAYING) {
+            val drift = SystemClock.elapsedRealtime() - state.lastPositionUpdateTime
+            position += (drift * state.playbackSpeed).toLong()
+        }
+        return if (position < 0L) 0L else position
+    }
+
     private fun renderTransport(state: PlaybackStateCompat?, metadata: MediaMetadataCompat?) {
         val playing = state?.state == PlaybackStateCompat.STATE_PLAYING
         buttonPlayPause.text = if (playing) "Pause" else "Play"
 
         playingMediaId = metadata?.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID)
         val title = metadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)
+        val totalMs = metadata?.getLong(MediaMetadataCompat.METADATA_KEY_DURATION) ?: 0L
 
+        // Clock first: the line is single-line and a long lecture title would
+        // otherwise push the time off the end of the screen.
         nowPlaying.text = when {
-            title != null && title.isNotEmpty() -> title
+            !title.isNullOrEmpty() && totalMs > 0L ->
+                "${formatClockMs(elapsedMs(state))} / ${formatClockMs(totalMs)}   $title"
+            !title.isNullOrEmpty() -> title
             state?.state == PlaybackStateCompat.STATE_BUFFERING -> "Loading"
             else -> "Nothing playing"
         }
+
+        tickHandler.removeCallbacks(positionTick)
+        if (playing) tickHandler.postDelayed(positionTick, TICK_MS)
     }
 
     // ---------- Rendering ----------

@@ -7,7 +7,14 @@ import java.net.URL
 import java.net.URLEncoder
 
 data class Artist(val id: String, val name: String, val albumCount: Int)
-data class Album(val id: String, val name: String, val year: String, val songCount: Int)
+data class Album(
+    val id: String,
+    val name: String,
+    val artist: String,
+    val year: String,
+    val songCount: Int
+)
+data class Playlist(val id: String, val name: String, val songCount: Int)
 data class Song(
     val id: String,
     val title: String,
@@ -28,6 +35,10 @@ class NavidromeApi(context: Context) {
         const val PREFS = "navi_prefs"
         private const val API_VERSION = "1.16.1"
         private const val CLIENT_NAME = "NaviPlayer"
+
+        /** Subsonic caps getAlbumList2 at 500 per call. */
+        private const val PAGE_SIZE = 500
+        private const val MAX_PAGES = 10
     }
 
     val server: String
@@ -73,6 +84,29 @@ class NavidromeApi(context: Context) {
         return root
     }
 
+    // ---------- Parsers, shared by every endpoint that returns these shapes ----------
+
+    private fun parseAlbum(a: JSONObject): Album {
+        val year = a.optInt("year", 0)
+        return Album(
+            id = a.getString("id"),
+            name = a.optString("name", a.optString("title", "Untitled album")),
+            artist = a.optString("artist", ""),
+            year = if (year > 0) year.toString() else "",
+            songCount = a.optInt("songCount", 0)
+        )
+    }
+
+    private fun parseSong(s: JSONObject, fallbackAlbum: String): Song = Song(
+        id = s.getString("id"),
+        title = s.optString("title", "Untitled"),
+        artist = s.optString("artist", ""),
+        album = s.optString("album", fallbackAlbum),
+        duration = s.optInt("duration", 0)
+    )
+
+    // ---------- Artists ----------
+
     /** Artists arrive nested in A-Z index buckets; flatten them into one list. */
     fun getArtists(): List<Artist> {
         val root = fetch("getArtists.view", "")
@@ -95,6 +129,8 @@ class NavidromeApi(context: Context) {
         return out
     }
 
+    // ---------- Albums ----------
+
     fun getAlbums(artistId: String): List<Album> {
         val id = URLEncoder.encode(artistId, "UTF-8")
         val root = fetch("getArtist.view", "id=$id")
@@ -102,19 +138,67 @@ class NavidromeApi(context: Context) {
         val albumArray = root.optJSONObject("artist")?.optJSONArray("album") ?: return out
 
         for (i in 0 until albumArray.length()) {
-            val a = albumArray.getJSONObject(i)
-            val year = a.optInt("year", 0)
+            out.add(parseAlbum(albumArray.getJSONObject(i)))
+        }
+        return out
+    }
+
+    /** Every album, alphabetically. Paged, because getAlbumList2 caps each call. */
+    fun getAllAlbums(): List<Album> {
+        val out = mutableListOf<Album>()
+        var offset = 0
+
+        for (page in 0 until MAX_PAGES) {
+            val root = fetch(
+                "getAlbumList2.view",
+                "type=alphabeticalByName&size=$PAGE_SIZE&offset=$offset"
+            )
+            val albumArray = root.optJSONObject("albumList2")?.optJSONArray("album") ?: break
+            if (albumArray.length() == 0) break
+
+            for (i in 0 until albumArray.length()) {
+                out.add(parseAlbum(albumArray.getJSONObject(i)))
+            }
+
+            if (albumArray.length() < PAGE_SIZE) break
+            offset += PAGE_SIZE
+        }
+        return out
+    }
+
+    // ---------- Playlists ----------
+
+    fun getPlaylists(): List<Playlist> {
+        val root = fetch("getPlaylists.view", "")
+        val out = mutableListOf<Playlist>()
+        val listArray = root.optJSONObject("playlists")?.optJSONArray("playlist") ?: return out
+
+        for (i in 0 until listArray.length()) {
+            val p = listArray.getJSONObject(i)
             out.add(
-                Album(
-                    id = a.getString("id"),
-                    name = a.optString("name", "Untitled album"),
-                    year = if (year > 0) year.toString() else "",
-                    songCount = a.optInt("songCount", 0)
+                Playlist(
+                    id = p.getString("id"),
+                    name = p.optString("name", "Untitled playlist"),
+                    songCount = p.optInt("songCount", 0)
                 )
             )
         }
         return out
     }
+
+    fun getPlaylistSongs(playlistId: String): List<Song> {
+        val id = URLEncoder.encode(playlistId, "UTF-8")
+        val root = fetch("getPlaylist.view", "id=$id")
+        val out = mutableListOf<Song>()
+        val entryArray = root.optJSONObject("playlist")?.optJSONArray("entry") ?: return out
+
+        for (i in 0 until entryArray.length()) {
+            out.add(parseSong(entryArray.getJSONObject(i), ""))
+        }
+        return out
+    }
+
+    // ---------- Tracks ----------
 
     fun getSongs(albumId: String): List<Song> {
         val id = URLEncoder.encode(albumId, "UTF-8")
@@ -125,16 +209,7 @@ class NavidromeApi(context: Context) {
         val songArray = albumNode.optJSONArray("song") ?: return out
 
         for (i in 0 until songArray.length()) {
-            val s = songArray.getJSONObject(i)
-            out.add(
-                Song(
-                    id = s.getString("id"),
-                    title = s.optString("title", "Untitled"),
-                    artist = s.optString("artist", ""),
-                    album = albumName,
-                    duration = s.optInt("duration", 0)
-                )
-            )
+            out.add(parseSong(songArray.getJSONObject(i), albumName))
         }
         return out
     }

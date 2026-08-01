@@ -153,70 +153,108 @@
             android:listSelector="@android:color/transparent"
             android:cacheColorHint="@android:color/transparent" />
 
-        <!-- Transport bar -->
+        <!-- Transport: what's playing on top, controls across the full width below -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:orientation="vertical"
             android:background="@color/ink_black"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="12dp"
-            android:paddingBottom="12dp"
-            android:gravity="center_vertical">
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp">
 
             <TextView
                 android:id="@+id/now_playing"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
                 android:text="Nothing playing"
                 android:textColor="@color/ink_white"
                 android:textSize="13sp"
                 android:singleLine="true"
-                android:ellipsize="end" />
+                android:ellipsize="end"
+                android:layout_marginBottom="10dp" />
 
-            <Button
-                android:id="@+id/button_prev"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Prev"
-                android:textColor="@color/ink_black"
-                android:textSize="13sp"
-                android:background="@color/ink_white"
-                android:stateListAnimator="@null"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:layout_marginStart="8dp" />
+                android:orientation="horizontal">
 
-            <Button
-                android:id="@+id/button_play_pause"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Play"
-                android:textColor="@color/ink_black"
-                android:textSize="13sp"
-                android:background="@color/ink_white"
-                android:stateListAnimator="@null"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:layout_marginStart="6dp" />
+                <Button
+                    android:id="@+id/button_prev"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Prev"
+                    android:textColor="@color/ink_black"
+                    android:textSize="13sp"
+                    android:background="@color/ink_white"
+                    android:stateListAnimator="@null"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp" />
 
-            <Button
-                android:id="@+id/button_next"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Next"
-                android:textColor="@color/ink_black"
-                android:textSize="13sp"
-                android:background="@color/ink_white"
-                android:stateListAnimator="@null"
-                android:minWidth="0dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:layout_marginStart="6dp" />
+                <Button
+                    android:id="@+id/button_rewind"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="-15"
+                    android:textColor="@color/ink_black"
+                    android:textSize="13sp"
+                    android:background="@color/ink_white"
+                    android:stateListAnimator="@null"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:layout_marginStart="4dp" />
+
+                <Button
+                    android:id="@+id/button_play_pause"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Play"
+                    android:textColor="@color/ink_black"
+                    android:textSize="13sp"
+                    android:background="@color/ink_white"
+                    android:stateListAnimator="@null"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:layout_marginStart="4dp" />
+
+                <Button
+                    android:id="@+id/button_forward"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="+15"
+                    android:textColor="@color/ink_black"
+                    android:textSize="13sp"
+                    android:background="@color/ink_white"
+                    android:stateListAnimator="@null"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:layout_marginStart="4dp" />
+
+                <Button
+                    android:id="@+id/button_next"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Next"
+                    android:textColor="@color/ink_black"
+                    android:textSize="13sp"
+                    android:background="@color/ink_white"
+                    android:stateListAnimator="@null"
+                    android:minWidth="0dp"
+                    android:paddingStart="0dp"
+                    android:paddingEnd="0dp"
+                    android:layout_marginStart="4dp" />
+
+            </LinearLayout>
 
         </LinearLayout>
 
