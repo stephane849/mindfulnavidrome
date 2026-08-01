@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# Build output
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# OS noise
+.DS_Store
+Thumbs.db
