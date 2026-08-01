@@ -1,10 +1,8 @@
 package com.stephane.naviplayer
 
 import android.Manifest
-import android.app.Activity
 import android.content.ComponentName
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
@@ -15,17 +13,59 @@ import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaControllerCompat
 import android.support.v4.media.session.PlaybackStateCompat
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
-import android.widget.*
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.mudita.mmd.ThemeMMD
+import com.mudita.mmd.black
+import com.mudita.mmd.components.buttons.ButtonMMD
+import com.mudita.mmd.components.buttons.OutlinedButtonMMD
+import com.mudita.mmd.components.divider.HorizontalDividerMMD
+import com.mudita.mmd.components.lazy.LazyColumnMMD
+import com.mudita.mmd.components.text.TextMMD
+import com.mudita.mmd.components.text_field.TextFieldMMD
+import com.mudita.mmd.components.top_app_bar.TopAppBarMMD
+import com.mudita.mmd.white
 
 /**
  * Browses through MediaBrowserCompat and drives playback through
  * MediaControllerCompat. Holds no MediaPlayer of its own, so closing this
  * screen does not stop the music.
+ *
+ * Presented with Mudita Mindful Design: [ThemeMMD] supplies the pure black and
+ * white E-Ink colour scheme, the Lato type scale and a globally disabled
+ * ripple, and [LazyColumnMMD] replaces smooth scrolling with a stepped jump of
+ * whole rows so each drag costs one clean E-Ink refresh instead of a smear.
  */
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     companion object {
         /** Title of the mode picker at the top of the browse tree. */
@@ -43,68 +83,35 @@ class MainActivity : Activity() {
     private var controller: MediaControllerCompat? = null
     private lateinit var api: NavidromeApi
 
-    private lateinit var loginPanel: View
-    private lateinit var browsePanel: View
-    private lateinit var inputServer: EditText
-    private lateinit var inputUsername: EditText
-    private lateinit var inputPassword: EditText
-    private lateinit var buttonConnect: Button
-    private lateinit var loginStatus: TextView
-    private lateinit var buttonBack: Button
-    private lateinit var textTitle: TextView
-    private lateinit var browseList: ListView
-    private lateinit var nowPlaying: TextView
-    private lateinit var buttonPrev: Button
-    private lateinit var buttonRewind: Button
-    private lateinit var buttonPlayPause: Button
-    private lateinit var buttonForward: Button
-    private lateinit var buttonNext: Button
-
     /** Breadcrumb of (mediaId, screen title) - last entry is what is on screen. */
     private val stack = mutableListOf<Pair<String, String>>()
-    private var rows: List<MediaBrowserCompat.MediaItem> = emptyList()
-    private var playingMediaId: String? = null
+
+    // ---------- Everything the UI reads ----------
+
+    private var rows by mutableStateOf<List<MediaBrowserCompat.MediaItem>>(emptyList())
+    private var playingMediaId by mutableStateOf<String?>(null)
+    private var playbackState by mutableStateOf<PlaybackStateCompat?>(null)
+    private var metadata by mutableStateOf<MediaMetadataCompat?>(null)
+    private var positionMs by mutableStateOf(0L)
+    private var screenTitle by mutableStateOf(ROOT_TITLE)
+    private var canGoUp by mutableStateOf(false)
+    private var showLogin by mutableStateOf(true)
+    private var loginStatus by mutableStateOf("")
+
+    private var serverField by mutableStateOf("")
+    private var usernameField by mutableStateOf("")
+    private var passwordField by mutableStateOf("")
 
     private val tickHandler = Handler(Looper.getMainLooper())
     private val positionTick = object : Runnable {
-        override fun run() {
-            renderTransport(controller?.playbackState, controller?.metadata)
-        }
+        override fun run() = refreshPosition()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
         volumeControlStream = AudioManager.STREAM_MUSIC
 
         api = NavidromeApi(this)
-
-        loginPanel = findViewById(R.id.login_panel)
-        browsePanel = findViewById(R.id.browse_panel)
-        inputServer = findViewById(R.id.input_server)
-        inputUsername = findViewById(R.id.input_username)
-        inputPassword = findViewById(R.id.input_password)
-        buttonConnect = findViewById(R.id.button_connect)
-        loginStatus = findViewById(R.id.login_status)
-        buttonBack = findViewById(R.id.button_back)
-        textTitle = findViewById(R.id.text_title)
-        browseList = findViewById(R.id.browse_list)
-        nowPlaying = findViewById(R.id.now_playing)
-        buttonPrev = findViewById(R.id.button_prev)
-        buttonRewind = findViewById(R.id.button_rewind)
-        buttonPlayPause = findViewById(R.id.button_play_pause)
-        buttonForward = findViewById(R.id.button_forward)
-        buttonNext = findViewById(R.id.button_next)
-
-        buttonConnect.setOnClickListener { onConnectClicked() }
-        buttonBack.setOnClickListener { goUp() }
-        buttonPrev.setOnClickListener { controller?.transportControls?.skipToPrevious() }
-        buttonNext.setOnClickListener { controller?.transportControls?.skipToNext() }
-        buttonRewind.setOnClickListener { controller?.transportControls?.rewind() }
-        buttonForward.setOnClickListener { controller?.transportControls?.fastForward() }
-        buttonPlayPause.setOnClickListener { togglePlayPause() }
-        browseList.setOnItemClickListener { _, _, position, _ -> onRowTapped(position) }
-
         requestNotificationPermissionIfNeeded()
 
         browser = MediaBrowserCompat(
@@ -115,16 +122,18 @@ class MainActivity : Activity() {
         )
 
         if (api.isConfigured()) {
-            inputServer.setText(api.server)
-            inputUsername.setText(
-                getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE)
-                    .getString("username", "")
-            )
-            inputPassword.setText(
-                getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE)
-                    .getString("password", "")
-            )
-            showBrowsePanel()
+            val prefs = getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE)
+            serverField = api.server
+            usernameField = prefs.getString("username", "") ?: ""
+            passwordField = prefs.getString("password", "") ?: ""
+            showLogin = false
+        }
+
+        setContent {
+            ThemeMMD {
+                BackHandler(enabled = !showLogin && canGoUp) { goUp() }
+                if (showLogin) LoginScreen() else BrowseScreen()
+            }
         }
     }
 
@@ -150,7 +159,10 @@ class MainActivity : Activity() {
             ctrl.registerCallback(controllerCallback)
             controller = ctrl
 
-            renderTransport(ctrl.playbackState, ctrl.metadata)
+            playbackState = ctrl.playbackState
+            metadata = ctrl.metadata
+            playingMediaId = ctrl.metadata?.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID)
+            refreshPosition()
 
             if (api.isConfigured()) {
                 if (stack.isEmpty()) stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
@@ -159,18 +171,19 @@ class MainActivity : Activity() {
         }
 
         override fun onConnectionFailed() {
-            loginStatus.text = "Playback service unavailable"
+            loginStatus = "Playback service unavailable"
         }
     }
 
     private val controllerCallback = object : MediaControllerCompat.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
-            renderTransport(state, controller?.metadata)
+            playbackState = state
+            refreshPosition()
         }
 
-        override fun onMetadataChanged(metadata: MediaMetadataCompat?) {
-            renderTransport(controller?.playbackState, metadata)
-            renderRows()
+        override fun onMetadataChanged(md: MediaMetadataCompat?) {
+            metadata = md
+            playingMediaId = md?.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID)
         }
     }
 
@@ -183,16 +196,15 @@ class MainActivity : Activity() {
         ) {
             if (stack.isEmpty() || parentId != stack.last().first) return
             rows = children
-            renderRows()
             if (children.isEmpty()) {
                 Toast.makeText(this@MainActivity, "Nothing here", Toast.LENGTH_SHORT).show()
             }
         }
 
         override fun onError(parentId: String) {
-            textTitle.text = stack.lastOrNull()?.second ?: ROOT_TITLE
             if (!api.isConfigured()) {
-                showLoginPanel("Enter your server details")
+                loginStatus = "Enter your server details"
+                showLogin = true
             } else {
                 Toast.makeText(
                     this@MainActivity,
@@ -206,15 +218,13 @@ class MainActivity : Activity() {
     private fun subscribeCurrent() {
         val (mediaId, title) = stack.last()
         rows = emptyList()
-        browseList.adapter = RowAdapter(emptyList())
-        buttonBack.visibility = if (stack.size > 1) View.VISIBLE else View.GONE
+        canGoUp = stack.size > 1
+        screenTitle = title
         browser.unsubscribe(mediaId)
         browser.subscribe(mediaId, subscriptionCallback)
-        textTitle.text = title
     }
 
-    private fun onRowTapped(position: Int) {
-        val item = rows.getOrNull(position) ?: return
+    private fun onRowTapped(item: MediaBrowserCompat.MediaItem) {
         val mediaId = item.mediaId ?: return
 
         if (item.isBrowsable) {
@@ -233,20 +243,15 @@ class MainActivity : Activity() {
         subscribeCurrent()
     }
 
-    override fun onBackPressed() {
-        if (browsePanel.visibility == View.VISIBLE && stack.size > 1) goUp()
-        else super.onBackPressed()
-    }
-
     // ---------- Login ----------
 
     private fun onConnectClicked() {
-        val server = inputServer.text.toString().trim().trimEnd('/')
-        val username = inputUsername.text.toString().trim()
-        val password = inputPassword.text.toString()
+        val server = serverField.trim().trimEnd('/')
+        val username = usernameField.trim()
+        val password = passwordField
 
         if (server.isEmpty() || username.isEmpty() || password.isEmpty()) {
-            loginStatus.text = "Fill in all three fields"
+            loginStatus = "Fill in all three fields"
             return
         }
 
@@ -256,21 +261,11 @@ class MainActivity : Activity() {
             .putString("password", password)
             .apply()
 
-        showBrowsePanel()
+        loginStatus = ""
+        showLogin = false
         stack.clear()
         stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
         if (browser.isConnected) subscribeCurrent() else browser.connect()
-    }
-
-    private fun showBrowsePanel() {
-        loginPanel.visibility = View.GONE
-        browsePanel.visibility = View.VISIBLE
-    }
-
-    private fun showLoginPanel(message: String) {
-        browsePanel.visibility = View.GONE
-        loginPanel.visibility = View.VISIBLE
-        loginStatus.text = message
     }
 
     // ---------- Transport ----------
@@ -298,68 +293,253 @@ class MainActivity : Activity() {
         return if (position < 0L) 0L else position
     }
 
-    private fun renderTransport(state: PlaybackStateCompat?, metadata: MediaMetadataCompat?) {
-        val playing = state?.state == PlaybackStateCompat.STATE_PLAYING
-        buttonPlayPause.text = if (playing) "Pause" else "Play"
+    /** Publishes the position and re-arms the tick, but only while playing. */
+    private fun refreshPosition() {
+        tickHandler.removeCallbacks(positionTick)
+        positionMs = elapsedMs(playbackState)
+        if (playbackState?.state == PlaybackStateCompat.STATE_PLAYING) {
+            tickHandler.postDelayed(positionTick, TICK_MS)
+        }
+    }
 
-        playingMediaId = metadata?.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID)
-        val title = metadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)
+    // ---------- Screens ----------
+
+    @Composable
+    private fun LoginScreen() {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(white)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 24.dp),
+        ) {
+            TextMMD("Navi player", style = MaterialTheme.typography.headlineLarge)
+            Spacer(Modifier.height(24.dp))
+
+            TextFieldMMD(
+                value = serverField,
+                onValueChange = { serverField = it },
+                label = { TextMMD("Server", style = MaterialTheme.typography.labelMedium) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+
+            TextFieldMMD(
+                value = usernameField,
+                onValueChange = { usernameField = it },
+                label = { TextMMD("Username", style = MaterialTheme.typography.labelMedium) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+
+            TextFieldMMD(
+                value = passwordField,
+                onValueChange = { passwordField = it },
+                label = { TextMMD("Password", style = MaterialTheme.typography.labelMedium) },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(24.dp))
+
+            ButtonMMD(
+                onClick = { onConnectClicked() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 48.dp),
+            ) {
+                TextMMD("Connect")
+            }
+
+            if (loginStatus.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                TextMMD(loginStatus, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+
+    @Composable
+    private fun BrowseScreen() {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(white),
+        ) {
+            TopAppBarMMD(
+                title = {
+                    TextMMD(
+                        text = screenTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    if (canGoUp) {
+                        TextMMD(
+                            text = "Back",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier
+                                .clickable { goUp() }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
+                    }
+                },
+            )
+
+            LazyColumnMMD(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            ) {
+                itemsIndexed(rows) { index, item ->
+                    BrowseRow(item)
+                    if (index < rows.lastIndex) HorizontalDividerMMD()
+                }
+            }
+
+            TransportBar()
+        }
+    }
+
+    /**
+     * Two lines of type, no colour: hierarchy comes from size alone, because
+     * MMD has no grey and mid-greys dither badly on E-Ink. The row currently
+     * playing inverts to white on black, which is the only selection cue.
+     */
+    @Composable
+    private fun BrowseRow(item: MediaBrowserCompat.MediaItem) {
+        val isPlaying = item.mediaId != null && item.mediaId == playingMediaId
+        val background = if (isPlaying) black else white
+        val foreground = if (isPlaying) white else black
+        val subtitle = item.description.subtitle?.toString() ?: ""
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(background)
+                .clickable { onRowTapped(item) }
+                .defaultMinSize(minHeight = 48.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            TextMMD(
+                text = item.description.title?.toString() ?: "",
+                color = foreground,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                TextMMD(
+                    text = subtitle,
+                    color = foreground,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun TransportBar() {
+        val state = playbackState
+        val playing = state?.state == PlaybackStateCompat.STATE_PLAYING
         val totalMs = metadata?.getLong(MediaMetadataCompat.METADATA_KEY_DURATION) ?: 0L
+        val title = metadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)
 
         // Clock first: the line is single-line and a long lecture title would
         // otherwise push the time off the end of the screen.
-        nowPlaying.text = when {
+        val line = when {
             !title.isNullOrEmpty() && totalMs > 0L ->
-                "${formatClockMs(elapsedMs(state))} / ${formatClockMs(totalMs)}   $title"
+                "${formatClockMs(positionMs)} / ${formatClockMs(totalMs)}   $title"
             !title.isNullOrEmpty() -> title
             state?.state == PlaybackStateCompat.STATE_BUFFERING -> "Loading"
             else -> "Nothing playing"
         }
 
-        tickHandler.removeCallbacks(positionTick)
-        if (playing) tickHandler.postDelayed(positionTick, TICK_MS)
-    }
-
-    // ---------- Rendering ----------
-
-    private fun renderRows() {
-        browseList.adapter = RowAdapter(rows)
-    }
-
-    inner class RowAdapter(
-        private val items: List<MediaBrowserCompat.MediaItem>
-    ) : BaseAdapter() {
-
-        override fun getCount() = items.size
-        override fun getItem(position: Int) = items[position]
-        override fun getItemId(position: Int) = position.toLong()
-
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val view = convertView ?: LayoutInflater.from(this@MainActivity)
-                .inflate(R.layout.list_item_row, parent, false)
-
-            val item = items[position]
-            val titleView = view.findViewById<TextView>(R.id.row_title)
-            val subtitleView = view.findViewById<TextView>(R.id.row_subtitle)
-
-            val subtitle = item.description.subtitle?.toString() ?: ""
-            titleView.text = item.description.title?.toString() ?: ""
-            subtitleView.text = subtitle
-            subtitleView.visibility = if (subtitle.isEmpty()) View.GONE else View.VISIBLE
-
-            // Playing row inverts to white on black: the only selection cue
-            val inverted = item.mediaId != null && item.mediaId == playingMediaId
-            if (inverted) {
-                view.setBackgroundColor(Color.BLACK)
-                titleView.setTextColor(Color.WHITE)
-                subtitleView.setTextColor(Color.parseColor("#CCCCCC"))
-            } else {
-                view.setBackgroundColor(Color.WHITE)
-                titleView.setTextColor(Color.BLACK)
-                subtitleView.setTextColor(Color.parseColor("#777777"))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(white),
+        ) {
+            HorizontalDividerMMD()
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                TextMMD(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TransportButton("Prev", Modifier.weight(1f)) {
+                        controller?.transportControls?.skipToPrevious()
+                    }
+                    TransportButton("-15", Modifier.weight(1f)) {
+                        controller?.transportControls?.rewind()
+                    }
+                    TransportButton(
+                        label = if (playing) "Pause" else "Play",
+                        modifier = Modifier.weight(1f),
+                        primary = true,
+                    ) { togglePlayPause() }
+                    TransportButton("+15", Modifier.weight(1f)) {
+                        controller?.transportControls?.fastForward()
+                    }
+                    TransportButton("Next", Modifier.weight(1f)) {
+                        controller?.transportControls?.skipToNext()
+                    }
+                }
             }
+        }
+    }
 
-            return view
+    /**
+     * Play/pause is the filled button, everything else outlined: MMD expresses
+     * emphasis through fill, not colour or size.
+     */
+    @Composable
+    private fun TransportButton(
+        label: String,
+        modifier: Modifier = Modifier,
+        primary: Boolean = false,
+        onClick: () -> Unit,
+    ) {
+        val content: @Composable RowScope.() -> Unit = {
+            TextMMD(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+        }
+        // Five controls on a narrow screen, so the padding is tighter than the
+        // MMD default while the 48dp touch target is kept.
+        val padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+        val sized = modifier.defaultMinSize(minHeight = 48.dp)
+
+        if (primary) {
+            ButtonMMD(
+                onClick = onClick,
+                modifier = sized,
+                contentPadding = padding,
+                content = content,
+            )
+        } else {
+            OutlinedButtonMMD(
+                onClick = onClick,
+                modifier = sized,
+                contentPadding = padding,
+                content = content,
+            )
         }
     }
 

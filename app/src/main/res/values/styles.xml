@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Only the window itself is styled here now; everything inside is drawn
+         by Compose under ThemeMMD, which also turns ripple off globally. -->
     <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/ink_white</item>
         <item name="android:colorBackground">@color/ink_white</item>
         <item name="android:textColor">@color/ink_black</item>
         <!-- Disable window transition animations to avoid E-Ink ghosting -->
         <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:colorControlHighlight">@android:color/transparent</item>
-        <item name="android:listSelector">@android:color/transparent</item>
     </style>
 </resources>

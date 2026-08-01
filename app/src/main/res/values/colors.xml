@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- MMD's eInkColorScheme is pure black and white with no grey anywhere,
+         so there is no third colour here either. -->
     <color name="ink_black">#000000</color>
     <color name="ink_white">#FFFFFF</color>
-    <color name="ink_gray">#777777</color>
 </resources>
