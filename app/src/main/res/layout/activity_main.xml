@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/ink_white">
+
+    <!-- LOGIN PANEL -->
+    <LinearLayout
+        android:id="@+id/login_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:padding="20dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Navi player"
+            android:textColor="@color/ink_black"
+            android:textSize="21sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="28dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Server"
+            android:textColor="@color/ink_gray"
+            android:textSize="12sp" />
+        <EditText
+            android:id="@+id/input_server"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="http://104.129.128.104:4533"
+            android:textColor="@color/ink_black"
+            android:textSize="14sp"
+            android:inputType="textUri"
+            android:layout_marginBottom="18dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Username"
+            android:textColor="@color/ink_gray"
+            android:textSize="12sp" />
+        <EditText
+            android:id="@+id/input_username"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/ink_black"
+            android:textSize="14sp"
+            android:inputType="text"
+            android:layout_marginBottom="18dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Password"
+            android:textColor="@color/ink_gray"
+            android:textSize="12sp" />
+        <EditText
+            android:id="@+id/input_password"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/ink_black"
+            android:textSize="14sp"
+            android:inputType="textPassword"
+            android:layout_marginBottom="28dp" />
+
+        <Button
+            android:id="@+id/button_connect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Connect"
+            android:textColor="@color/ink_white"
+            android:textSize="15sp"
+            android:background="@color/ink_black"
+            android:stateListAnimator="@null" />
+
+        <TextView
+            android:id="@+id/login_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textColor="@color/ink_gray"
+            android:textSize="12sp"
+            android:text="" />
+
+    </LinearLayout>
+
+    <!-- BROWSE PANEL -->
+    <LinearLayout
+        android:id="@+id/browse_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <!-- Header: back + title -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="18dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp">
+
+            <Button
+                android:id="@+id/button_back"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Back"
+                android:textColor="@color/ink_black"
+                android:textSize="14sp"
+                android:background="@android:color/transparent"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:paddingStart="6dp"
+                android:paddingEnd="12dp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/text_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Artists"
+                android:textColor="@color/ink_black"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:paddingStart="6dp"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1px"
+            android:background="@color/ink_black" />
+
+        <ListView
+            android:id="@+id/browse_list"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:divider="@color/ink_black"
+            android:dividerHeight="1px"
+            android:listSelector="@android:color/transparent"
+            android:cacheColorHint="@android:color/transparent" />
+
+        <!-- Transport bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@color/ink_black"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/now_playing"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Nothing playing"
+                android:textColor="@color/ink_white"
+                android:textSize="13sp"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+            <Button
+                android:id="@+id/button_prev"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Prev"
+                android:textColor="@color/ink_black"
+                android:textSize="13sp"
+                android:background="@color/ink_white"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:layout_marginStart="8dp" />
+
+            <Button
+                android:id="@+id/button_play_pause"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Play"
+                android:textColor="@color/ink_black"
+                android:textSize="13sp"
+                android:background="@color/ink_white"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:layout_marginStart="6dp" />
+
+            <Button
+                android:id="@+id/button_next"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Next"
+                android:textColor="@color/ink_black"
+                android:textSize="13sp"
+                android:background="@color/ink_white"
+                android:stateListAnimator="@null"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:layout_marginStart="6dp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>
