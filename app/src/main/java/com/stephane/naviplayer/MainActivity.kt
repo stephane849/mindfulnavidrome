@@ -468,8 +468,7 @@ class MainActivity : ComponentActivity() {
         val meta = item.mediaMetadata
 
         queueIndexOf(mediaId)?.let { index ->
-            browser?.seekTo(index, 0L)
-            browser?.play()
+            sendQueueEdit(MusicService.OP_QUEUE_PLAY, index)
             return
         }
 
@@ -518,39 +517,80 @@ class MainActivity : ComponentActivity() {
      * leaving it unprepared here costs nothing.
      */
     private fun addToQueue(item: MediaItem) {
-        val browser = this.browser ?: return
-        actionTarget = null
-        browser.addMediaItem(item)
+        sendQueueEdit(MusicService.OP_QUEUE_ADD, 0, item = item)
         showStatus("Queued ${item.mediaMetadata.title}")
     }
 
     private fun playNext(item: MediaItem) {
-        val browser = this.browser ?: return
-        actionTarget = null
-        if (browser.mediaItemCount == 0) {
-            addToQueue(item)
-            return
-        }
-        browser.addMediaItem(browser.currentMediaItemIndex + 1, item)
+        sendQueueEdit(MusicService.OP_QUEUE_ADD_NEXT, 0, item = item)
         showStatus("Playing next: ${item.mediaMetadata.title}")
     }
 
     private fun clearQueue() {
-        val browser = this.browser ?: return
-        actionTarget = null
-        browser.clearMediaItems()
-        browseCache.remove(MusicService.CAT_QUEUE)
+        sendQueueEdit(MusicService.OP_QUEUE_CLEAR, 0)
         showStatus("Queue cleared")
-        loadCurrent()
     }
 
     private fun removeFromQueue(index: Int) {
+        sendQueueEdit(MusicService.OP_QUEUE_REMOVE, index)
+    }
+
+    /**
+     * Reorders by one place; the sheet offers it as Move up and Move down.
+     * Bounds are the service's to check - while a station is playing the
+     * player's item count is 1 and says nothing about the queue's length.
+     */
+    private fun moveInQueue(index: Int, to: Int) {
+        sendQueueEdit(MusicService.OP_QUEUE_MOVE, index, to)
+    }
+
+    /**
+     * Every queue edit goes to the service rather than to the player directly.
+     * While a station is playing the queue is not in the player at all, and only
+     * the service knows that - so it decides whether an edit lands on the
+     * timeline or on the stored copy.
+     */
+    private fun sendQueueEdit(
+        op: String,
+        index: Int,
+        to: Int = -1,
+        item: MediaItem? = null,
+    ) {
         val browser = this.browser ?: return
         actionTarget = null
-        if (index !in 0 until browser.mediaItemCount) return
-        browser.removeMediaItem(index)
-        browseCache.remove(MusicService.CAT_QUEUE)
-        loadCurrent()
+
+        val future = browser.sendCustomCommand(
+            SessionCommand(MusicService.COMMAND_QUEUE_EDIT, Bundle.EMPTY),
+            Bundle().apply {
+                putString(MusicService.ARG_QUEUE_OP, op)
+                putInt(MusicService.ARG_QUEUE_INDEX, index)
+                putInt(MusicService.ARG_QUEUE_TO, to)
+                item?.let {
+                    putString(MusicService.ARG_QUEUE_MEDIA_ID, it.mediaId)
+                    putString(
+                        MusicService.ARG_QUEUE_TITLE,
+                        it.mediaMetadata.title?.toString() ?: "",
+                    )
+                    putString(
+                        MusicService.ARG_QUEUE_SUBTITLE,
+                        it.mediaMetadata.subtitle?.toString() ?: "",
+                    )
+                }
+            },
+        )
+        // Reload once the edit has actually been applied, or the list would be
+        // rebuilt from the state it had a moment ago
+        future.addListener(
+            {
+                // loadCurrent talks to the browser, which is application-thread
+                // only, and the future need not complete on it
+                runOnUiThread {
+                    browseCache.remove(MusicService.CAT_QUEUE)
+                    loadCurrent()
+                }
+            },
+            MoreExecutors.directExecutor(),
+        )
     }
 
     private fun queueIndexOf(mediaId: String): Int? =
@@ -1420,16 +1460,33 @@ class MainActivity : ComponentActivity() {
                             }
 
                         queueIndex != null -> {
-                            SmallAction("Remove", Modifier.weight(1f)) {
-                                removeFromQueue(queueIndex)
+                            SmallAction("Move up", Modifier.weight(1f)) {
+                                moveInQueue(queueIndex, queueIndex - 1)
                             }
-                            SmallAction("Clear all", Modifier.weight(1f)) { clearQueue() }
+                            SmallAction("Move down", Modifier.weight(1f)) {
+                                moveInQueue(queueIndex, queueIndex + 1)
+                            }
                         }
 
                         else -> {
                             SmallAction("Play next", Modifier.weight(1f)) { playNext(item) }
                             SmallAction("Queue", Modifier.weight(1f)) { addToQueue(item) }
                         }
+                    }
+                }
+
+                // Four actions do not fit across this screen, and reordering is
+                // the one you reach for repeatedly, so it gets the first row
+                queueIndexOf(item.mediaId)?.let { queueIndex ->
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SmallAction("Remove", Modifier.weight(1f)) {
+                            removeFromQueue(queueIndex)
+                        }
+                        SmallAction("Clear all", Modifier.weight(1f)) { clearQueue() }
                     }
                 }
                 Spacer(Modifier.height(16.dp))

@@ -101,6 +101,27 @@ class MusicService : MediaLibraryService() {
         const val COMMAND_SLEEP_TIMER = "com.stephane.naviplayer.SLEEP_TIMER"
         const val ARG_SLEEP_MINUTES = "minutes"
 
+        /**
+         * Queue edits go through the service because the queue is not always in
+         * the player - while a station is playing it lives on disk, and a
+         * controller cannot tell the difference.
+         */
+        const val COMMAND_QUEUE_EDIT = "com.stephane.naviplayer.QUEUE_EDIT"
+        const val ARG_QUEUE_OP = "op"
+        const val ARG_QUEUE_INDEX = "index"
+        const val ARG_QUEUE_TO = "to"
+
+        const val ARG_QUEUE_MEDIA_ID = "media_id"
+        const val ARG_QUEUE_TITLE = "title"
+        const val ARG_QUEUE_SUBTITLE = "subtitle"
+
+        const val OP_QUEUE_PLAY = "play"
+        const val OP_QUEUE_MOVE = "move"
+        const val OP_QUEUE_REMOVE = "remove"
+        const val OP_QUEUE_CLEAR = "clear"
+        const val OP_QUEUE_ADD = "add"
+        const val OP_QUEUE_ADD_NEXT = "add_next"
+
         /** Carried in MediaMetadata extras to the browsing client. */
         const val EXTRA_PROGRESS = "progress"
         const val EXTRA_PLAYED = "played"
@@ -245,15 +266,27 @@ class MusicService : MediaLibraryService() {
     private fun restoreQueue() {
         if (player.mediaItemCount > 0) return
         val saved = queueStore.load() ?: return
+        loadIntoPlayer(saved.entries, saved.index, saved.positionMs, play = false)
+    }
 
-        // These go straight onto the player rather than arriving from a
-        // controller, so onAddMediaItems never sees them and nothing else will
-        // attach a URL. setMediaItems builds its media sources there and then,
-        // and an item with no URI takes the service down as it is created -
-        // which meant one saved queue made the app unopenable.
+    /**
+     * Puts queue entries onto the player, resolving each to a stream URL first.
+     *
+     * They go straight onto the player rather than arriving from a controller,
+     * so onAddMediaItems never sees them and nothing else will attach a URL.
+     * setMediaItems builds its media sources there and then, and an item with
+     * no URI takes the service down as it is created - which is how one saved
+     * queue once made the app unopenable.
+     */
+    private fun loadIntoPlayer(
+        saved: List<QueueEntry>,
+        index: Int,
+        positionMs: Long,
+        play: Boolean,
+    ) {
         val entries = mutableListOf<QueueEntry>()
         val items = mutableListOf<MediaItem>()
-        for (entry in saved.entries) {
+        for (entry in saved) {
             val uri = streamUriFor(entry.mediaId) ?: continue
             entries.add(entry)
             items.add(
@@ -274,20 +307,35 @@ class MusicService : MediaLibraryService() {
 
         if (items.isEmpty()) {
             queueStore.clear()
+            queueSnapshot = emptyList()
             return
         }
 
         queueSnapshot = entries
         // Re-clamped, because anything that would not resolve has been dropped
-        player.setMediaItems(
-            items,
-            saved.index.coerceIn(0, items.lastIndex),
-            saved.positionMs,
-        )
+        player.setMediaItems(items, index.coerceIn(0, items.lastIndex), positionMs)
+        if (play) {
+            player.prepare()
+            player.play()
+        }
     }
+
+    /**
+     * True when the player holds nothing but a station.
+     *
+     * There is one timeline, so playing radio has to displace whatever was in
+     * it - but a station is not part of your listening queue, and tuning in
+     * should not throw away a run of episodes you lined up. While this is true
+     * the queue is left alone: it stays on disk and in the snapshot the Queue
+     * screen reads, and edits to it are applied there instead of to the player.
+     */
+    private fun radioOnly(): Boolean =
+        player.mediaItemCount == 1 && isRadio(player.getMediaItemAt(0).mediaId)
 
     /** Snapshots the queue for the browse tree and writes it to disk. */
     private fun captureQueue() {
+        if (radioOnly()) return
+
         val entries = (0 until player.mediaItemCount).map { i ->
             val item = player.getMediaItemAt(i)
             QueueEntry(
@@ -522,6 +570,100 @@ class MusicService : MediaLibraryService() {
         sleepAtMs = 0L
     }
 
+    // ---------- Queue edits ----------
+
+    /**
+     * Applies an edit to whichever copy of the queue is currently authoritative:
+     * the player normally, the stored one while a station is playing.
+     */
+    private fun editQueue(op: String, index: Int, to: Int, entry: QueueEntry?) {
+        if (radioOnly()) {
+            editStoredQueue(op, index, to, entry)
+            return
+        }
+
+        val count = player.mediaItemCount
+        when (op) {
+            OP_QUEUE_PLAY -> if (index in 0 until count) {
+                player.seekTo(index, 0L)
+                if (player.playbackState == Player.STATE_IDLE) player.prepare()
+                player.play()
+            }
+            OP_QUEUE_MOVE -> if (index in 0 until count && to in 0 until count) {
+                player.moveMediaItem(index, to)
+            }
+            OP_QUEUE_REMOVE -> if (index in 0 until count) player.removeMediaItem(index)
+            OP_QUEUE_CLEAR -> player.clearMediaItems()
+            OP_QUEUE_ADD -> playerItemFor(entry)?.let { player.addMediaItem(it) }
+            OP_QUEUE_ADD_NEXT -> playerItemFor(entry)?.let {
+                if (count == 0) {
+                    player.addMediaItem(it)
+                } else {
+                    player.addMediaItem(player.currentMediaItemIndex + 1, it)
+                }
+            }
+        }
+    }
+
+    /** Resolved here rather than in onAddMediaItems, which these bypass. */
+    private fun playerItemFor(entry: QueueEntry?): MediaItem? {
+        if (entry == null) return null
+        val uri = streamUriFor(entry.mediaId) ?: return null
+        return MediaItem.Builder()
+            .setMediaId(entry.mediaId)
+            .setUri(uri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(entry.title)
+                    .setSubtitle(entry.subtitle)
+                    .setIsBrowsable(false)
+                    .setIsPlayable(true)
+                    .build()
+            )
+            .build()
+    }
+
+    /**
+     * The queue is not in the player, so the edit lands on disk. Playing from
+     * it is what finally displaces the station - that is you choosing to listen
+     * to something else, rather than radio quietly eating your queue.
+     */
+    private fun editStoredQueue(op: String, index: Int, to: Int, entry: QueueEntry?) {
+        val saved = queueStore.load()
+        val entries = saved?.entries?.toMutableList() ?: mutableListOf()
+
+        when (op) {
+            OP_QUEUE_PLAY -> {
+                if (index in entries.indices) {
+                    loadIntoPlayer(entries, index, 0L, play = true)
+                }
+                return
+            }
+            OP_QUEUE_MOVE -> if (index in entries.indices && to in entries.indices) {
+                entries.add(to, entries.removeAt(index))
+            }
+            OP_QUEUE_REMOVE -> if (index in entries.indices) entries.removeAt(index)
+            OP_QUEUE_CLEAR -> entries.clear()
+            // Queued while a station plays: it belongs to the queue you are
+            // building, not next to the station, which has no next
+            OP_QUEUE_ADD, OP_QUEUE_ADD_NEXT -> entry?.let { entries.add(it) }
+        }
+
+        queueSnapshot = entries
+        if (entries.isEmpty()) {
+            queueStore.clear()
+        } else {
+            queueStore.save(
+                entries,
+                (saved?.index ?: 0).coerceIn(0, entries.lastIndex),
+                saved?.positionMs ?: 0L,
+            )
+        }
+        session.notifyChildrenChanged(CAT_QUEUE, Int.MAX_VALUE, null)
+    }
+
+    // ---------- Sleep timer ----------
+
     private fun setSleepTimer(minutes: Int) {
         handler.removeCallbacks(sleepRunnable)
         if (minutes <= 0) {
@@ -542,6 +684,7 @@ class MusicService : MediaLibraryService() {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                 .buildUpon()
                 .add(SessionCommand(COMMAND_SLEEP_TIMER, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_QUEUE_EDIT, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
@@ -556,6 +699,24 @@ class MusicService : MediaLibraryService() {
         ): ListenableFuture<SessionResult> {
             if (customCommand.customAction == COMMAND_SLEEP_TIMER) {
                 setSleepTimer(args.getInt(ARG_SLEEP_MINUTES, 0))
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            if (customCommand.customAction == COMMAND_QUEUE_EDIT) {
+                val mediaId = args.getString(ARG_QUEUE_MEDIA_ID).orEmpty()
+                editQueue(
+                    args.getString(ARG_QUEUE_OP).orEmpty(),
+                    args.getInt(ARG_QUEUE_INDEX, -1),
+                    args.getInt(ARG_QUEUE_TO, -1),
+                    if (mediaId.isEmpty()) {
+                        null
+                    } else {
+                        QueueEntry(
+                            mediaId = mediaId,
+                            title = args.getString(ARG_QUEUE_TITLE).orEmpty(),
+                            subtitle = args.getString(ARG_QUEUE_SUBTITLE).orEmpty(),
+                        )
+                    },
+                )
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
             return super.onCustomCommand(session, controller, customCommand, args)
