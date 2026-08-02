@@ -23,9 +23,11 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,6 +91,7 @@ class MainActivity : ComponentActivity() {
     private var browserFuture: ListenableFuture<MediaBrowser>? = null
     private var browser: MediaBrowser? = null
     private lateinit var api: NavidromeApi
+    private lateinit var resume: ResumeStore
 
     /** Breadcrumb of (mediaId, screen title) - last entry is what is on screen. */
     private val stack = mutableListOf<Pair<String, String>>()
@@ -116,6 +120,7 @@ class MainActivity : ComponentActivity() {
 
     private var showAddFeed by mutableStateOf(false)
     private var feedUrlField by mutableStateOf("")
+    private var searchResults by mutableStateOf<List<PodcastResult>>(emptyList())
 
     private var serverField by mutableStateOf("")
     private var usernameField by mutableStateOf("")
@@ -138,6 +143,7 @@ class MainActivity : ComponentActivity() {
         volumeControlStream = AudioManager.STREAM_MUSIC
 
         api = NavidromeApi(this)
+        resume = ResumeStore(this)
         requestNotificationPermissionIfNeeded()
 
         if (api.isConfigured()) {
@@ -164,11 +170,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // Write the position from this side too. Leaving it to the service
+        // meant relying on it being torn down cleanly, which does not happen
+        // when the process is simply killed after the app goes away.
+        savePlaybackState()
+        resume.saveStack(stack)
+
         tickHandler.removeCallbacks(positionTick)
         browser?.removeListener(playerListener)
         browserFuture?.let { MediaBrowser.releaseFuture(it) }
         browserFuture = null
         browser = null
+    }
+
+    private fun savePlaybackState() {
+        val browser = this.browser ?: return
+        val item = browser.currentMediaItem ?: return
+        val duration = browser.duration
+
+        resume.save(
+            item.mediaId.substringAfterLast('/'),
+            browser.currentPosition,
+            if (duration == C.TIME_UNSET) 0L else duration,
+        )
+        resume.saveLast(item.mediaId, item.mediaMetadata.title?.toString() ?: "")
     }
 
     // ---------- Service connection ----------
@@ -189,10 +214,13 @@ class MainActivity : ComponentActivity() {
                 connected.addListener(playerListener)
                 syncFromPlayer(connected)
 
-                if (api.isConfigured()) {
-                    if (stack.isEmpty()) stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
-                    loadCurrent()
+                if (stack.isEmpty()) {
+                    // Reopen on the screen you left rather than back at the root
+                    val saved = resume.stack()
+                    if (saved.isNotEmpty()) stack.addAll(saved)
+                    else stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
                 }
+                loadCurrent()
             },
             MoreExecutors.directExecutor(),
         )
@@ -246,6 +274,41 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /**
+     * One field for both jobs: anything that looks like a URL is treated as a
+     * feed, anything else is a directory search.
+     */
+    private fun onFeedInputSubmitted() {
+        val input = feedUrlField.trim()
+        if (input.isEmpty()) return
+
+        if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
+            addFeed(input)
+        } else {
+            searchPodcasts(input)
+        }
+    }
+
+    private fun searchPodcasts(term: String) {
+        statusMessage = "Searching…"
+        searchResults = emptyList()
+
+        Thread {
+            val results = try {
+                PodcastSearch.search(term)
+            } catch (e: Exception) {
+                runOnUiThread {
+                    statusMessage = "Search failed: ${e.javaClass.simpleName}: ${e.message}"
+                }
+                return@Thread
+            }
+            runOnUiThread {
+                searchResults = results
+                statusMessage = if (results.isEmpty()) "Nothing found for \"$term\"" else ""
+            }
+        }.start()
+    }
+
     /** Feeds are fetched here rather than in the service, so the store is
      *  written by one side only and the list simply reloads afterwards. */
     private fun addFeed(url: String) {
@@ -254,12 +317,13 @@ class MainActivity : ComponentActivity() {
         statusMessage = "Fetching feed…"
         showAddFeed = false
         feedUrlField = ""
+        searchResults = emptyList()
 
         Thread {
             val message = try {
                 val feed = PodcastFeed.fetch(trimmed)
                 PodcastStore(this).save(feed)
-                "Added ${feed.title}"
+                "Subscribed to ${feed.title}"
             } catch (e: Exception) {
                 "Couldn't add feed: ${e.javaClass.simpleName}: ${e.message}"
             }
@@ -620,24 +684,64 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(white)
+                // Bounded and scrollable so a long result list cannot push the
+                // browse list and transport bar off the screen
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             TextFieldMMD(
                 value = feedUrlField,
                 onValueChange = { feedUrlField = it },
-                label = { TextMMD("Feed URL", style = MaterialTheme.typography.labelMedium) },
+                label = {
+                    TextMMD(
+                        "Search, or paste a feed URL",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Search,
+                ),
+                keyboardActions = KeyboardActions(onSearch = { onFeedInputSubmitted() }),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(12.dp))
             ButtonMMD(
-                onClick = { addFeed(feedUrlField) },
+                onClick = { onFeedInputSubmitted() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .defaultMinSize(minHeight = 48.dp),
             ) {
-                TextMMD("Subscribe")
+                TextMMD("Search")
+            }
+
+            for (result in searchResults) {
+                HorizontalDividerMMD(modifier = Modifier.padding(vertical = 12.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { addFeed(result.feedUrl) }
+                        .defaultMinSize(minHeight = 48.dp),
+                ) {
+                    TextMMD(
+                        text = result.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    TextMMD(
+                        text = listOf(
+                            result.author,
+                            if (result.episodeCount > 0) "${result.episodeCount} episodes" else "",
+                        ).filter { it.isNotEmpty() }.joinToString(" - "),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         HorizontalDividerMMD()

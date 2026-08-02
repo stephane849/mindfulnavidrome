@@ -198,6 +198,10 @@ class MusicService : MediaLibraryService() {
             mediaItem?.let {
                 resume.saveLast(it.mediaId, it.mediaMetadata.title?.toString() ?: "")
             }
+            // Auto-advancing between tracks leaves the player in STATE_READY
+            // throughout, so onPlaybackStateChanged never fires and the resume
+            // point for the new track would otherwise be ignored.
+            if (player.playbackState == Player.STATE_READY) applyPendingResume()
         }
 
         override fun onPositionDiscontinuity(
