@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -879,8 +880,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BarAction(label: String, onClick: () -> Unit) {
         TextMMD(
-            text = label,
-            style = MaterialTheme.typography.labelMedium.strong(),
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelMedium.chrome(),
             maxLines = 1,
             modifier = Modifier
                 .clickable { onClick() }
@@ -907,6 +908,14 @@ class MainActivity : ComponentActivity() {
                         // A station needs a name as well as a URL, so it gets
                         // its own form rather than going through Search
                         isRadioTab -> BarAction("Add") { showAddStation = true }
+                        // How many are lined up, said where the screen names
+                        // itself rather than crowded into the bottom bar
+                        section == Section.QUEUE && queueCount > 0 -> TextMMD(
+                            text = "$queueCount",
+                            style = MaterialTheme.typography.labelMedium.chrome(),
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
                     }
                 },
             )
@@ -922,7 +931,7 @@ class MainActivity : ComponentActivity() {
                             selected = libraryTab == index,
                             onClick = { selectLibraryTab(index) },
                             text = {
-                                TextMMD(label, style = MaterialTheme.typography.labelMedium.strong())
+                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelMedium.chrome())
                             },
                         )
                     }
@@ -938,7 +947,7 @@ class MainActivity : ComponentActivity() {
                             selected = episodeFilter == index,
                             onClick = { episodeFilter = index },
                             text = {
-                                TextMMD(label, style = MaterialTheme.typography.labelMedium.strong())
+                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelMedium.chrome())
                             },
                         )
                     }
@@ -1040,19 +1049,17 @@ class MainActivity : ComponentActivity() {
             contentAlignment = Alignment.Center,
         ) {
             TextMMD(
-                text = if (target == Section.QUEUE && queueCount > 1) {
-                    "$label $queueCount"
-                } else {
-                    label
-                },
+                // The count moved to the title bar, where the screen names
+                // itself, so the destination can just be the destination
+                text = label.uppercase(),
                 color = black,
                 // Bold against regular, rather than Black against bold: at this
                 // size Black closes up, and the underline is carrying the mark
                 // anyway
                 style = if (selected) {
-                    MaterialTheme.typography.labelSmall.strong()
+                    MaterialTheme.typography.labelSmall.chrome()
                 } else {
-                    MaterialTheme.typography.labelSmall
+                    MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.0.sp)
                 },
                 maxLines = 1,
             )
@@ -1122,6 +1129,19 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // The queue is the one list where order is information rather
+                // than decoration - it is what you are about to hear, in the
+                // sequence you will hear it - so it is the one list numbered.
+                queueIndexOf(item.mediaId)?.let { index ->
+                    TextMMD(
+                        text = "${index + 1}",
+                        color = foreground,
+                        style = MaterialTheme.typography.labelSmall.chrome(),
+                        maxLines = 1,
+                        modifier = Modifier.width(28.dp),
+                    )
+                }
+
                 Column(modifier = Modifier.weight(1f)) {
                     TextMMD(
                         text = item.mediaMetadata.title?.toString() ?: "",
@@ -1247,8 +1267,8 @@ class MainActivity : ComponentActivity() {
                 // looked exactly like the first.
                 if (!isRadio && queueCount > 1) {
                     TextMMD(
-                        text = "${queueIndex + 1} of $queueCount",
-                        style = MaterialTheme.typography.labelSmall.strong(),
+                        text = "${queueIndex + 1} OF $queueCount",
+                        style = MaterialTheme.typography.labelSmall.chrome(),
                         maxLines = 1,
                     )
                     Spacer(Modifier.height(6.dp))
@@ -1448,7 +1468,7 @@ class MainActivity : ComponentActivity() {
             modifier = modifier.defaultMinSize(minHeight = minHeight),
             contentPadding = PaddingValues(2.dp),
         ) {
-            TextMMD(label, style = MaterialTheme.typography.labelMedium.strong(), maxLines = 1)
+            TextMMD(label, style = MaterialTheme.typography.labelMedium.chrome(), maxLines = 1)
         }
     }
 
@@ -1462,7 +1482,11 @@ class MainActivity : ComponentActivity() {
             modifier = modifier.defaultMinSize(minHeight = 48.dp),
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         ) {
-            TextMMD(text = label, style = MaterialTheme.typography.labelMedium.strong(), maxLines = 1)
+            TextMMD(
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelMedium.chrome(),
+            maxLines = 1,
+        )
         }
     }
 
@@ -1678,8 +1702,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SectionHeading(label: String) {
         TextMMD(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.strong(),
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelSmall.chrome(),
             modifier = Modifier
                 .fillMaxWidth()
                 .background(white)

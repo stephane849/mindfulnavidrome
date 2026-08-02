@@ -43,3 +43,20 @@ fun TextStyle.strong(): TextStyle = copy(
     fontWeight = FontWeight.Bold,
     letterSpacing = 0.3.sp,
 )
+
+/**
+ * The register for chrome: tabs, navigation, and the labels on controls.
+ *
+ * Set in caps at the call site with tracking opened up to match. Caps read as a
+ * fixed row of marks rather than a word with a shape, which is what you want on
+ * something you hit rather than read - and the extra tracking is not decorative,
+ * it is what stops adjacent capitals closing into each other once the panel has
+ * dithered them.
+ *
+ * Still Lato. MMD ships no second face, and borrowing a system monospace to get
+ * a device look would mean leaving the design system to imitate it.
+ */
+fun TextStyle.chrome(): TextStyle = copy(
+    fontWeight = FontWeight.Bold,
+    letterSpacing = 1.0.sp,
+)
