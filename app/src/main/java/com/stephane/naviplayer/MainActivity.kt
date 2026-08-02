@@ -302,6 +302,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // A pending report means the last run died. Connecting starts the
+        // playback service, which is where a launch crash is most likely to
+        // come from - so hold off until the report has been read, or the app
+        // would crash again before it could be shown.
+        if (crashReport.isNotEmpty()) return
         connectBrowser()
     }
 
@@ -1522,6 +1527,13 @@ class MainActivity : ComponentActivity() {
 
     // ---------- Crash report ----------
 
+    private fun dismissCrashReport() {
+        CrashLog.clear(this)
+        crashReport = ""
+        // Startup was held back while the report was showing
+        connectBrowser()
+    }
+
     /**
      * Shown once after a crash, ahead of everything else. Sideloaded builds
      * have no adb behind them, so this is the only way the trace gets off the
@@ -1562,9 +1574,18 @@ class MainActivity : ComponentActivity() {
                     clipboard.setText(AnnotatedString(crashReport))
                 }
                 SmallAction("Dismiss", Modifier.weight(1f)) {
-                    CrashLog.clear(this@MainActivity)
-                    crashReport = ""
+                    dismissCrashReport()
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // A crash that repeats on every launch is usually something saved
+            // being read back. This drops the only two things startup touches
+            // by itself, and leaves the login and resume positions alone.
+            SmallAction("Clear queue and reopen", Modifier.fillMaxWidth()) {
+                QueueStore(this@MainActivity).clear()
+                resume.saveLast("", "")
+                dismissCrashReport()
             }
         }
     }
