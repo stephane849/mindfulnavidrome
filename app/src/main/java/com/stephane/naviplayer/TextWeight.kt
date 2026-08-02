@@ -1,6 +1,7 @@
 package com.stephane.naviplayer
 
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
@@ -45,18 +46,26 @@ fun TextStyle.strong(): TextStyle = copy(
 )
 
 /**
- * The register for chrome: tabs, navigation, and the labels on controls.
+ * The register for chrome: tabs, navigation, section headings, the labels on
+ * controls, and anything counted.
  *
- * Set in caps at the call site with tracking opened up to match. Caps read as a
- * fixed row of marks rather than a word with a shape, which is what you want on
- * something you hit rather than read - and the extra tracking is not decorative,
- * it is what stops adjacent capitals closing into each other once the panel has
- * dithered them.
+ * A second face, deliberately. MMD ships only Lato, so this is the one place
+ * the app steps outside the design system - and it earns it: chrome is not
+ * prose. It is a fixed set of words you hit rather than read, and a monospaced
+ * face makes them a rack of switches instead of a sentence. Counts and
+ * positions stop shuffling sideways as their digits change, too, which is what
+ * tabular figures are for and Lato has none.
  *
- * Still Lato. MMD ships no second face, and borrowing a system monospace to get
- * a device look would mean leaving the design system to imitate it.
+ * Set in caps at the call site. Less tracking than the proportional version
+ * needed: a monospaced glyph already carries its own side bearings, so opening
+ * it further would only make the words fall apart.
+ *
+ * FontFamily.Monospace rather than a bundled file - it resolves to whatever the
+ * device ships and costs nothing to carry. If the Kompakt's mono turns out to
+ * be poor, bundling a known face is the fix.
  */
-fun TextStyle.chrome(): TextStyle = copy(
-    fontWeight = FontWeight.Bold,
-    letterSpacing = 1.0.sp,
+fun TextStyle.chrome(bold: Boolean = true): TextStyle = copy(
+    fontFamily = FontFamily.Monospace,
+    fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+    letterSpacing = 0.5.sp,
 )

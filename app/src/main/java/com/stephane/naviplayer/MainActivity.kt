@@ -58,7 +58,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -931,7 +930,7 @@ class MainActivity : ComponentActivity() {
                             selected = libraryTab == index,
                             onClick = { selectLibraryTab(index) },
                             text = {
-                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelMedium.chrome())
+                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelSmall.chrome(), maxLines = 1)
                             },
                         )
                     }
@@ -947,7 +946,7 @@ class MainActivity : ComponentActivity() {
                             selected = episodeFilter == index,
                             onClick = { episodeFilter = index },
                             text = {
-                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelMedium.chrome())
+                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelSmall.chrome(), maxLines = 1)
                             },
                         )
                     }
@@ -1056,11 +1055,7 @@ class MainActivity : ComponentActivity() {
                 // Bold against regular, rather than Black against bold: at this
                 // size Black closes up, and the underline is carrying the mark
                 // anyway
-                style = if (selected) {
-                    MaterialTheme.typography.labelSmall.chrome()
-                } else {
-                    MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.0.sp)
-                },
+                style = MaterialTheme.typography.labelSmall.chrome(bold = selected),
                 maxLines = 1,
             )
             if (selected) SelectionUnderline()
