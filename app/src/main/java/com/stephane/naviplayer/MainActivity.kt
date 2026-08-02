@@ -768,7 +768,7 @@ class MainActivity : ComponentActivity() {
                 title = {
                     TextMMD(
                         text = currentTitle,
-                        style = MaterialTheme.typography.titleMedium.strong(),
+                        style = MaterialTheme.typography.titleMedium.heavy(),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -990,7 +990,7 @@ class MainActivity : ComponentActivity() {
             TextMMD(
                 text = item.mediaMetadata.title?.toString() ?: "",
                 color = foreground,
-                style = MaterialTheme.typography.bodyMedium.strong(),
+                style = MaterialTheme.typography.bodyMedium.heavy(),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1078,7 +1078,7 @@ class MainActivity : ComponentActivity() {
                 title = {
                     TextMMD(
                         text = "Now playing",
-                        style = MaterialTheme.typography.titleMedium.strong(),
+                        style = MaterialTheme.typography.titleMedium.heavy(),
                         maxLines = 1,
                     )
                 },
@@ -1103,7 +1103,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 TextMMD(
                     text = nowPlayingTitle ?: "Nothing playing",
-                    style = MaterialTheme.typography.titleLarge.strong(),
+                    style = MaterialTheme.typography.titleLarge.heavy(),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1508,7 +1508,7 @@ class MainActivity : ComponentActivity() {
             TextMMD(
                 text = title,
                 color = foreground,
-                style = MaterialTheme.typography.bodyMedium.strong(),
+                style = MaterialTheme.typography.bodyMedium.heavy(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1548,7 +1548,7 @@ class MainActivity : ComponentActivity() {
                 .background(white)
                 .padding(horizontal = 16.dp, vertical = 16.dp),
         ) {
-            TextMMD("It crashed", style = MaterialTheme.typography.titleLarge.strong())
+            TextMMD("It crashed", style = MaterialTheme.typography.titleLarge.heavy())
             Spacer(Modifier.height(4.dp))
             TextMMD(
                 "Copy this and send it over - it says what went wrong.",
@@ -1627,7 +1627,7 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 24.dp),
         ) {
-            TextMMD("Navi player", style = MaterialTheme.typography.headlineLarge.strong())
+            TextMMD("Navi player", style = MaterialTheme.typography.headlineLarge.heavy())
             Spacer(Modifier.height(24.dp))
 
             TextFieldMMD(
