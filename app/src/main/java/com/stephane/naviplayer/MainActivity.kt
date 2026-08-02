@@ -28,11 +28,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
@@ -49,6 +52,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -155,8 +159,6 @@ class MainActivity : ComponentActivity() {
     private var scrubbing by mutableStateOf(false)
     private var scrubFraction by mutableStateOf(0f)
 
-    private var showAddFeed by mutableStateOf(false)
-    private var feedUrlField by mutableStateOf("")
     private var podcastResults by mutableStateOf<List<PodcastResult>>(emptyList())
 
     private var searchField by mutableStateOf("")
@@ -486,6 +488,14 @@ class MainActivity : ComponentActivity() {
     private fun runSearch() {
         val term = searchField.trim()
         if (term.isEmpty()) return
+
+        // A pasted feed URL is a subscription, not a search
+        if (term.startsWith("http://", true) || term.startsWith("https://", true)) {
+            addFeed(term)
+            searchField = ""
+            return
+        }
+
         showStatus("Searching…")
         searchSongs = emptyList()
         podcastResults = emptyList()
@@ -536,23 +546,10 @@ class MainActivity : ComponentActivity() {
 
     // ---------- Feeds ----------
 
-    private fun onFeedInputSubmitted() {
-        val input = feedUrlField.trim()
-        if (input.isEmpty()) return
-        if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
-            addFeed(input)
-        } else {
-            // Discovery lives in the Search destination, which can show results
-            showStatus("That is not a URL - use Search to find a podcast by name")
-        }
-    }
-
     private fun addFeed(url: String) {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return
         showStatus("Fetching feed…")
-        showAddFeed = false
-        feedUrlField = ""
         podcastResults = emptyList()
 
         Thread {
@@ -646,10 +643,10 @@ class MainActivity : ComponentActivity() {
                 actions = {
                     if (section == Section.PODCASTS && currentStack.isEmpty()) {
                         TextMMD(
-                            text = if (showAddFeed) "Close" else "Add",
+                            text = "Add",
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier
-                                .clickable { showAddFeed = !showAddFeed }
+                                .clickable { switchSection(Section.SEARCH) }
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                         )
                     }
@@ -715,7 +712,6 @@ class MainActivity : ComponentActivity() {
         }
 
         // Sheets rather than inline panels, which used to shove the list around
-        if (showAddFeed) AddFeedSheet()
         actionTarget?.let { QueueActionsSheet(it) }
     }
 
@@ -893,10 +889,13 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.defaultMinSize(minHeight = 44.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                TextMMD(
-                    text = if (isPlaying) "Pause" else "Play",
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
+                Icon(
+                    painter = painterResource(
+                        if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play
+                    ),
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = black,
+                    modifier = Modifier.size(22.dp),
                 )
             }
         }
@@ -928,17 +927,18 @@ class MainActivity : ComponentActivity() {
                 },
             )
 
+            // Deliberately not scrollable: everything is sized to fit, so the
+            // controls are always where you left them
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 24.dp),
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
             ) {
                 TextMMD(
                     text = nowPlayingTitle ?: "Nothing playing",
                     style = MaterialTheme.typography.titleLarge,
-                    maxLines = 3,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 nowPlayingSubtitle?.takeIf { it.isNotEmpty() }?.let {
@@ -951,7 +951,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.weight(1f))
 
                 if (durationMs > 0L) {
                     SliderMMD(
@@ -988,65 +988,48 @@ class MainActivity : ComponentActivity() {
                     TextMMD("Loading", style = MaterialTheme.typography.bodySmall)
                 }
 
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(20.dp))
 
-                // Play/pause dominates, the 15s jumps flank it, track skipping
-                // sits below at lower weight
+                // One row rather than two, so the screen fits without scrolling.
+                // Play/pause still dominates through size; every icon is black
+                // on white, so all five read the same way.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OutlinedButtonMMD(
-                        onClick = { browser?.seekBack() },
-                        modifier = Modifier
-                            .weight(1f)
-                            .defaultMinSize(minHeight = 64.dp),
-                        contentPadding = PaddingValues(4.dp),
-                    ) {
-                        TextMMD("-15", style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                    IconAction(
+                        icon = R.drawable.ic_prev,
+                        label = "Previous",
+                        modifier = Modifier.weight(1f),
+                        minHeight = 56.dp,
+                    ) { browser?.seekToPreviousMediaItem() }
+
+                    LabelAction("-15", Modifier.weight(1f), minHeight = 56.dp) {
+                        browser?.seekBack()
                     }
-                    ButtonMMD(
-                        onClick = { togglePlayPause() },
-                        modifier = Modifier
-                            .weight(1.4f)
-                            .defaultMinSize(minHeight = 72.dp),
-                        contentPadding = PaddingValues(4.dp),
-                    ) {
-                        TextMMD(
-                            text = if (isPlaying) "Pause" else "Play",
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                        )
+
+                    IconAction(
+                        icon = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play,
+                        label = if (isPlaying) "Pause" else "Play",
+                        modifier = Modifier.weight(1.5f),
+                        minHeight = 72.dp,
+                        iconSize = 34.dp,
+                    ) { togglePlayPause() }
+
+                    LabelAction("+15", Modifier.weight(1f), minHeight = 56.dp) {
+                        browser?.seekForward()
                     }
-                    OutlinedButtonMMD(
-                        onClick = { browser?.seekForward() },
-                        modifier = Modifier
-                            .weight(1f)
-                            .defaultMinSize(minHeight = 64.dp),
-                        contentPadding = PaddingValues(4.dp),
-                    ) {
-                        TextMMD("+15", style = MaterialTheme.typography.labelLarge, maxLines = 1)
-                    }
+
+                    IconAction(
+                        icon = R.drawable.ic_next,
+                        label = "Next",
+                        modifier = Modifier.weight(1f),
+                        minHeight = 56.dp,
+                    ) { browser?.seekToNextMediaItem() }
                 }
 
-                Spacer(Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SmallAction("Prev", Modifier.weight(1f)) {
-                        browser?.seekToPreviousMediaItem()
-                    }
-                    SmallAction("Next", Modifier.weight(1f)) {
-                        browser?.seekToNextMediaItem()
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-                HorizontalDividerMMD()
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(20.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1060,15 +1043,51 @@ class MainActivity : ComponentActivity() {
                         Modifier.weight(1f),
                     ) { cycleSleepTimer() }
                 }
+                // The queue has its own destination in the bottom bar, so a
+                // button for it here only pushed the screen past its height
 
-                if (queueCount > 1) {
-                    Spacer(Modifier.height(16.dp))
-                    SmallAction("Queue ($queueCount)", Modifier.fillMaxWidth()) {
-                        showNowPlaying = false
-                        switchSection(Section.QUEUE)
-                    }
-                }
+                Spacer(Modifier.weight(1f))
             }
+        }
+    }
+
+    /** Black icon on white, outlined: the transport controls read as one set. */
+    @Composable
+    private fun IconAction(
+        icon: Int,
+        label: String,
+        modifier: Modifier = Modifier,
+        minHeight: Dp = 56.dp,
+        iconSize: Dp = 26.dp,
+        onClick: () -> Unit,
+    ) {
+        OutlinedButtonMMD(
+            onClick = onClick,
+            modifier = modifier.defaultMinSize(minHeight = minHeight),
+            contentPadding = PaddingValues(2.dp),
+        ) {
+            Icon(
+                painter = painterResource(icon),
+                contentDescription = label,
+                tint = black,
+                modifier = Modifier.size(iconSize),
+            )
+        }
+    }
+
+    @Composable
+    private fun LabelAction(
+        label: String,
+        modifier: Modifier = Modifier,
+        minHeight: Dp = 56.dp,
+        onClick: () -> Unit,
+    ) {
+        OutlinedButtonMMD(
+            onClick = onClick,
+            modifier = modifier.defaultMinSize(minHeight = minHeight),
+            contentPadding = PaddingValues(2.dp),
+        ) {
+            TextMMD(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
     }
 
@@ -1125,58 +1144,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    @Composable
-    private fun AddFeedSheet() {
-        ModalBottomSheetMMD(
-            onDismissRequest = { showAddFeed = false },
-            sheetState = rememberModalBottomSheetMMDState(),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                TextMMD(
-                    text = "Add a podcast",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Spacer(Modifier.height(4.dp))
-                TextMMD(
-                    text = "Paste a feed URL, or use Search to find one by name",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.height(16.dp))
-
-                TextFieldMMD(
-                    value = feedUrlField,
-                    onValueChange = { feedUrlField = it },
-                    label = {
-                        TextMMD("Feed URL", style = MaterialTheme.typography.labelMedium)
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Go,
-                    ),
-                    keyboardActions = KeyboardActions(onGo = { onFeedInputSubmitted() }),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(12.dp))
-                ButtonMMD(
-                    onClick = { onFeedInputSubmitted() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 48.dp),
-                ) {
-                    TextMMD("Subscribe")
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
-    }
-
-    // ---------- Search ----------
 
     @Composable
     private fun SearchScreen() {
