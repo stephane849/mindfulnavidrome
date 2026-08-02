@@ -100,7 +100,16 @@ private enum class Section { LIBRARY, PODCASTS, QUEUE, SEARCH }
 class MainActivity : ComponentActivity() {
 
     companion object {
-        private const val TICK_MS = 15_000L
+        /**
+         * The clock moves once a second. It used to tick every fifteen, to
+         * spare the panel, but a timer that sits still and then jumps reads as
+         * broken rather than as restful - and this is one line of text being
+         * redrawn, not an animation.
+         */
+        private const val TICK_MS = 1_000L
+
+        /** Never re-arm tighter than this, whatever the arithmetic says. */
+        private const val MIN_TICK_MS = 200L
 
         /** Bounded so a large library cannot overflow the Binder transaction. */
         private const val PAGE_SIZE = 400
@@ -719,7 +728,18 @@ class MainActivity : ComponentActivity() {
         tickHandler.removeCallbacks(positionTick)
         val browser = this.browser ?: return
         positionMs = browser.currentPosition.coerceAtLeast(0L)
-        if (browser.isPlaying) tickHandler.postDelayed(positionTick, TICK_MS)
+        if (!browser.isPlaying) return
+
+        // Aim at the next whole second rather than a second from now. Every
+        // player event refreshes the position, and each one cancels and re-arms
+        // this timer - so a fixed delay let an event mid-second push the clock
+        // past a tick, which is what made it look stopped rather than coarse.
+        // Divided by speed because at 1.5x a second of audio takes two thirds
+        // of a second to play.
+        val speed = browser.playbackParameters.speed.coerceAtLeast(0.1f)
+        val untilNextSecond = TICK_MS - (positionMs % TICK_MS)
+        val delay = (untilNextSecond / speed).toLong().coerceIn(MIN_TICK_MS, TICK_MS)
+        tickHandler.postDelayed(positionTick, delay)
     }
 
     // ---------- Shell ----------
