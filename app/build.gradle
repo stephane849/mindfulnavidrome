@@ -23,7 +23,24 @@ android {
         compose true
     }
 
+    // A fixed debug key, committed on purpose. Without it every CI run
+    // generates its own throwaway keystore, so each APK is signed differently
+    // and refuses to install over the last one - which meant uninstalling, and
+    // losing saved credentials, resume positions and the queue, on every build.
+    // This is a debug key only and grants nothing: it never signs a release.
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
         }
