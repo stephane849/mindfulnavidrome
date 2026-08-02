@@ -36,12 +36,10 @@ android {
 
     kotlinOptions {
         jvmTarget = '17'
-        // TopAppBarMMD and TextFieldMMD expose experimental Material 3 types;
-        // most of Media3's ExoPlayer surface is still marked UnstableApi
-        freeCompilerArgs += [
-            '-opt-in=androidx.compose.material3.ExperimentalMaterial3Api',
-            '-opt-in=androidx.media3.common.util.UnstableApi',
-        ]
+        // TopAppBarMMD and TextFieldMMD expose experimental Material 3 types.
+        // Media3's @UnstableApi needs no counterpart here: it is a plain Java
+        // annotation, not a Kotlin opt-in marker, so kotlinc does not gate on it.
+        freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api']
     }
 }
 
