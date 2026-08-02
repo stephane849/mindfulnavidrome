@@ -1,0 +1,13 @@
+<!-- A solid triangle rather than an outlined chevron: two strokes meeting at a
+     point lose the point once the panel has dithered them, and a filled shape
+     holds at this size. Ink spans 9 to 17 so it reads as pointing rather than
+     as sitting off-centre. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M9,5 L17,12 L9,19 Z" />
+</vector>

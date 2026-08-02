@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -44,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -82,7 +84,6 @@ import com.mudita.mmd.components.tabs.PrimaryTabRowMMD
 import com.mudita.mmd.components.tabs.TabMMD
 import com.mudita.mmd.components.text.TextMMD
 import com.mudita.mmd.components.text_field.TextFieldMMD
-import com.mudita.mmd.components.top_app_bar.TopAppBarMMD
 import com.mudita.mmd.white
 
 /** Top-level destinations, each with its own back stack. */
@@ -115,6 +116,9 @@ class MainActivity : ComponentActivity() {
 
         /** Bounded so a large library cannot overflow the Binder transaction. */
         private const val PAGE_SIZE = 400
+
+        /** Both title-bar side slots, equal so the title centres on the screen. */
+        private val BAR_SLOT = 76.dp
 
         private val SPEEDS = listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
         private val SLEEP_MINUTES = listOf(0, 15, 30, 45, 60)
@@ -154,6 +158,9 @@ class MainActivity : ComponentActivity() {
     private var positionMs by mutableStateOf(0L)
     private var durationMs by mutableStateOf(0L)
     private var queueCount by mutableStateOf(0)
+
+    /** Position in the queue, for the "n of m" line on Now Playing. */
+    private var queueIndex by mutableStateOf(0)
     private var speed by mutableStateOf(1.0f)
     private var sleepMinutes by mutableStateOf(0)
 
@@ -382,6 +389,7 @@ class MainActivity : ComponentActivity() {
         }
         durationMs = player.duration.let { if (it == C.TIME_UNSET) 0L else it }
         queueCount = player.mediaItemCount
+        queueIndex = player.currentMediaItemIndex.coerceAtLeast(0)
         speed = player.playbackParameters.speed
         refreshPosition()
     }
@@ -823,6 +831,63 @@ class MainActivity : ComponentActivity() {
 
     // ---------- Shell ----------
 
+    /**
+     * A title bar that names the screen in the middle of it.
+     *
+     * Hand-built rather than TopAppBarMMD, which wraps Material 3's start-aligned
+     * TopAppBar: its title slot begins after the navigation icon, so centring
+     * inside that slot centres on the space left over rather than on the screen,
+     * and drifts as the two edges change width. Equal fixed side slots make the
+     * title land in the middle whatever sits beside it.
+     */
+    @Composable
+    private fun ScreenBar(
+        title: String,
+        start: @Composable () -> Unit = {},
+        end: @Composable () -> Unit = {},
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(white)
+                .defaultMinSize(minHeight = 56.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier.width(BAR_SLOT),
+                contentAlignment = Alignment.CenterStart,
+                content = { start() },
+            )
+            TextMMD(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.heavy(),
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                modifier = Modifier.width(BAR_SLOT),
+                contentAlignment = Alignment.CenterEnd,
+                content = { end() },
+            )
+        }
+        HorizontalDividerMMD()
+    }
+
+    /** A bar action: a word you can tap, sized for a thumb. */
+    @Composable
+    private fun BarAction(label: String, onClick: () -> Unit) {
+        TextMMD(
+            text = label,
+            style = MaterialTheme.typography.labelMedium.strong(),
+            maxLines = 1,
+            modifier = Modifier
+                .clickable { onClick() }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+
     @Composable
     private fun MainShell() {
         Column(
@@ -830,46 +895,18 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .background(white),
         ) {
-            TopAppBarMMD(
-                title = {
-                    TextMMD(
-                        text = currentTitle,
-                        style = MaterialTheme.typography.titleMedium.heavy(),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+            ScreenBar(
+                title = currentTitle,
+                start = {
+                    if (currentStack.isNotEmpty()) BarAction("Back") { onBack() }
                 },
-                navigationIcon = {
-                    if (currentStack.isNotEmpty()) {
-                        TextMMD(
-                            text = "Back",
-                            style = MaterialTheme.typography.labelMedium.strong(),
-                            modifier = Modifier
-                                .clickable { onBack() }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        )
-                    }
-                },
-                actions = {
-                    if (section == Section.PODCASTS && currentStack.isEmpty()) {
-                        TextMMD(
-                            text = "Add",
-                            style = MaterialTheme.typography.labelMedium.strong(),
-                            modifier = Modifier
-                                .clickable { switchSection(Section.SEARCH) }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        )
-                    }
-                    // A station needs a name as well as a URL, so it gets its
-                    // own form rather than going through Search
-                    if (isRadioTab) {
-                        TextMMD(
-                            text = "Add",
-                            style = MaterialTheme.typography.labelMedium.strong(),
-                            modifier = Modifier
-                                .clickable { showAddStation = true }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        )
+                end = {
+                    when {
+                        section == Section.PODCASTS && currentStack.isEmpty() ->
+                            BarAction("Add") { switchSection(Section.SEARCH) }
+                        // A station needs a name as well as a URL, so it gets
+                        // its own form rather than going through Search
+                        isRadioTab -> BarAction("Add") { showAddStation = true }
                     }
                 },
             )
@@ -1079,38 +1116,54 @@ class MainActivity : ComponentActivity() {
             // different row becomes the current one
             if (isCurrent && !pressed) LeadingMark()
 
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                TextMMD(
-                    text = item.mediaMetadata.title?.toString() ?: "",
-                    color = foreground,
-                    style = if (isCurrent) {
-                        MaterialTheme.typography.bodyMedium.heavy()
-                    } else {
-                        MaterialTheme.typography.bodyMedium.strong()
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (subtitle.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     TextMMD(
-                        text = subtitle,
+                        text = item.mediaMetadata.title?.toString() ?: "",
                         color = foreground,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = if (isCurrent) {
+                            MaterialTheme.typography.bodyMedium.heavy()
+                        } else {
+                            MaterialTheme.typography.bodyMedium.strong()
+                        },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (subtitle.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        TextMMD(
+                            text = subtitle,
+                            color = foreground,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (progress > 0f) {
+                        Spacer(Modifier.height(6.dp))
+                        LinearProgressIndicatorMMD(
+                            progress = { progress },
+                            color = foreground,
+                            borderColor = foreground,
+                        )
+                    }
                 }
-                if (progress > 0f) {
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicatorMMD(
-                        progress = { progress },
-                        color = foreground,
-                        borderColor = foreground,
+
+                // The mark and its absence both carry: a row that opens says so,
+                // and a row without one plays. Nothing distinguished them before,
+                // so the only way to find out was to tap.
+                if (item.mediaMetadata.isBrowsable == true) {
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        painter = painterResource(R.drawable.ic_chevron),
+                        contentDescription = null,
+                        tint = foreground,
+                        modifier = Modifier.size(16.dp),
                     )
                 }
             }
@@ -1176,23 +1229,9 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .background(white),
         ) {
-            TopAppBarMMD(
-                title = {
-                    TextMMD(
-                        text = "Now playing",
-                        style = MaterialTheme.typography.titleMedium.heavy(),
-                        maxLines = 1,
-                    )
-                },
-                navigationIcon = {
-                    TextMMD(
-                        text = "Close",
-                        style = MaterialTheme.typography.labelMedium.strong(),
-                        modifier = Modifier
-                            .clickable { showNowPlaying = false }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                    )
-                },
+            ScreenBar(
+                title = "Now playing",
+                start = { BarAction("Close") { showNowPlaying = false } },
             )
 
             // Deliberately not scrollable: everything is sized to fit, so the
@@ -1203,6 +1242,17 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 16.dp),
             ) {
+                // Where you are in the run. Both numbers were already in state
+                // and neither was drawn, so four episodes into a queue of twelve
+                // looked exactly like the first.
+                if (!isRadio && queueCount > 1) {
+                    TextMMD(
+                        text = "${queueIndex + 1} of $queueCount",
+                        style = MaterialTheme.typography.labelSmall.strong(),
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
                 TextMMD(
                     text = nowPlayingTitle ?: "Nothing playing",
                     style = MaterialTheme.typography.titleLarge.heavy(),
@@ -1252,6 +1302,17 @@ class MainActivity : ComponentActivity() {
                             browser?.seekTo((scrubFraction * durationMs).toLong())
                             scrubbing = false
                             refreshPosition()
+                        },
+                        // A square on its corner, because a round handle at this
+                        // size dithers into a smudge and stops reading as a thing
+                        // you can take hold of.
+                        thumb = {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .rotate(45f)
+                                    .background(black),
+                            )
                         },
                         modifier = Modifier.fillMaxWidth(),
                     )
