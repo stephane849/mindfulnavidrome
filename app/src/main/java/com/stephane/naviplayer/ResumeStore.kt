@@ -27,6 +27,7 @@ class ResumeStore(context: Context) {
         /** Within this of the end, the track counts as finished. */
         const val END_SLACK_MS = 30 * 1000L
 
+        private const val PLAYED_PREFIX = "played_"
         private const val KEY_LAST_ID = "last_media_id"
         private const val KEY_LAST_TITLE = "last_title"
         private const val KEY_STACK = "browse_stack"
@@ -58,6 +59,18 @@ class ResumeStore(context: Context) {
     }
 
     fun position(songId: String): Long = prefs.getLong(songId, 0L)
+
+    /**
+     * Finishing a track clears its position, which would otherwise make a
+     * played episode indistinguishable from one never started. This records
+     * that it was heard, so lists can tell the two apart.
+     */
+    fun markPlayed(songId: String) {
+        prefs.edit().putBoolean(PLAYED_PREFIX + songId, true).apply()
+    }
+
+    fun isPlayed(songId: String): Boolean =
+        prefs.getBoolean(PLAYED_PREFIX + songId, false)
 
     fun clear(songId: String) {
         prefs.edit().remove(songId).apply()

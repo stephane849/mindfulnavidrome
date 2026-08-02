@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -66,7 +65,11 @@ import com.mudita.mmd.components.buttons.ButtonMMD
 import com.mudita.mmd.components.buttons.OutlinedButtonMMD
 import com.mudita.mmd.components.divider.HorizontalDividerMMD
 import com.mudita.mmd.components.lazy.LazyColumnMMD
+import com.mudita.mmd.components.bottom_sheet.ModalBottomSheetMMD
+import com.mudita.mmd.components.bottom_sheet.rememberModalBottomSheetMMDState
 import com.mudita.mmd.components.nav_bar.NavigationBarMMD
+import com.mudita.mmd.components.progress_indicator.LinearProgressIndicatorMMD
+import com.mudita.mmd.components.snackbar.SnackbarMMD
 import com.mudita.mmd.components.slider.SliderMMD
 import com.mudita.mmd.components.tabs.PrimaryTabRowMMD
 import com.mudita.mmd.components.tabs.TabMMD
@@ -140,7 +143,14 @@ class MainActivity : ComponentActivity() {
 
     private var showLogin by mutableStateOf(true)
     private var loginStatus by mutableStateOf("")
+    /** Transient, shown as a snackbar and cleared on a timer. */
     private var statusMessage by mutableStateOf("")
+
+    /** Persistent, for failures that need to stay on screen. */
+    private var errorMessage by mutableStateOf("")
+
+    /** 0 all, 1 unplayed, 2 in progress. */
+    private var episodeFilter by mutableStateOf(0)
 
     private var scrubbing by mutableStateOf(false)
     private var scrubFraction by mutableStateOf(0f)
@@ -160,6 +170,7 @@ class MainActivity : ComponentActivity() {
     private var bitrateField by mutableStateOf(NavidromeApi.DEFAULT_BITRATE.toString())
 
     private val tickHandler = Handler(Looper.getMainLooper())
+    private val statusClear = Runnable { statusMessage = "" }
     private val positionTick = object : Runnable {
         override fun run() = refreshPosition()
     }
@@ -187,6 +198,24 @@ class MainActivity : ComponentActivity() {
 
     private val currentMediaId: String
         get() = currentStack.lastOrNull()?.first ?: rootOf(section)
+
+    /** Episode filters apply only inside a podcast feed. */
+    private val visibleRows: List<MediaItem>
+        get() {
+            if (section != Section.PODCASTS || currentStack.isEmpty() || episodeFilter == 0) {
+                return rows
+            }
+            return rows.filter { item ->
+                val extras = item.mediaMetadata.extras
+                val progress = extras?.getFloat(MusicService.EXTRA_PROGRESS) ?: 0f
+                val played = extras?.getBoolean(MusicService.EXTRA_PLAYED) ?: false
+                when (episodeFilter) {
+                    1 -> !played && progress <= 0f
+                    2 -> progress > 0f
+                    else -> true
+                }
+            }
+        }
 
     private val currentTitle: String
         get() = currentStack.lastOrNull()?.second ?: when (section) {
@@ -306,7 +335,7 @@ class MainActivity : ComponentActivity() {
         val cached = browseCache[mediaId]
         rows = cached ?: emptyList()
         loading = cached == null
-        if (cached == null) statusMessage = ""
+        errorMessage = ""
 
         val future = browser.getChildren(mediaId, 0, PAGE_SIZE, null)
         future.addListener(
@@ -315,7 +344,7 @@ class MainActivity : ComponentActivity() {
                     future.get()
                 } catch (e: Exception) {
                     loading = false
-                    statusMessage = "Request failed: ${e.javaClass.simpleName}: ${e.message}"
+                    errorMessage = "Request failed: ${e.javaClass.simpleName}: ${e.message}"
                     return@addListener
                 }
                 if (currentMediaId != mediaId) return@addListener
@@ -324,11 +353,11 @@ class MainActivity : ComponentActivity() {
                 val children = result.value
                 when {
                     children == null ->
-                        statusMessage = "Browse error, result code ${result.resultCode}"
+                        errorMessage = "Browse error, result code ${result.resultCode}"
                     else -> {
                         browseCache[mediaId] = children
                         rows = children
-                        statusMessage = ""
+                        errorMessage = ""
                     }
                 }
             },
@@ -346,7 +375,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         section = target
-        statusMessage = ""
+        errorMessage = ""
         loadCurrent()
     }
 
@@ -390,7 +419,7 @@ class MainActivity : ComponentActivity() {
 
     private fun play(item: MediaItem) {
         val browser = this.browser ?: return
-        val playables = rows.filter { it.mediaMetadata.isPlayable == true }
+        val playables = visibleRows.filter { it.mediaMetadata.isPlayable == true }
         val startIndex = playables.indexOfFirst { it.mediaId == item.mediaId }
 
         if (startIndex < 0) browser.setMediaItem(item)
@@ -409,10 +438,10 @@ class MainActivity : ComponentActivity() {
             browser.setMediaItem(item)
             browser.prepare()
             browser.play()
-            statusMessage = "Playing ${item.mediaMetadata.title}"
+            showStatus("Playing ${item.mediaMetadata.title}")
         } else {
             browser.addMediaItem(item)
-            statusMessage = "Queued ${item.mediaMetadata.title}"
+            showStatus("Queued ${item.mediaMetadata.title}")
         }
     }
 
@@ -424,7 +453,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         browser.addMediaItem(browser.currentMediaItemIndex + 1, item)
-        statusMessage = "Playing next: ${item.mediaMetadata.title}"
+        showStatus("Playing next: ${item.mediaMetadata.title}")
     }
 
     private fun clearQueue() {
@@ -432,7 +461,7 @@ class MainActivity : ComponentActivity() {
         actionTarget = null
         browser.clearMediaItems()
         browseCache.remove(MusicService.CAT_QUEUE)
-        statusMessage = "Queue cleared"
+        showStatus("Queue cleared")
         loadCurrent()
     }
 
@@ -457,7 +486,7 @@ class MainActivity : ComponentActivity() {
     private fun runSearch() {
         val term = searchField.trim()
         if (term.isEmpty()) return
-        statusMessage = "Searching…"
+        showStatus("Searching…")
         searchSongs = emptyList()
         podcastResults = emptyList()
 
@@ -475,11 +504,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 searchSongs = songs
                 podcastResults = casts
-                statusMessage = if (songs.isEmpty() && casts.isEmpty()) {
-                    "Nothing found for \"$term\""
-                } else {
-                    ""
-                }
+                if (songs.isEmpty() && casts.isEmpty()) showStatus("Nothing found for \"$term\"")
             }
         }.start()
     }
@@ -487,7 +512,7 @@ class MainActivity : ComponentActivity() {
     private fun playSearchResult(song: Song) {
         val browser = this.browser ?: return
         if (song.albumId.isEmpty()) {
-            statusMessage = "That track has no album to play from"
+            showStatus("That track has no album to play from")
             return
         }
         val mediaId = "${MusicService.PREFIX_TRACK}${MusicService.PREFIX_ALBUM}" +
@@ -517,28 +542,15 @@ class MainActivity : ComponentActivity() {
         if (input.startsWith("http://", true) || input.startsWith("https://", true)) {
             addFeed(input)
         } else {
-            statusMessage = "Searching…"
-            Thread {
-                val results = try {
-                    PodcastSearch.search(input)
-                } catch (e: Exception) {
-                    runOnUiThread {
-                        statusMessage = "Search failed: ${e.javaClass.simpleName}"
-                    }
-                    return@Thread
-                }
-                runOnUiThread {
-                    podcastResults = results
-                    statusMessage = if (results.isEmpty()) "Nothing found" else ""
-                }
-            }.start()
+            // Discovery lives in the Search destination, which can show results
+            showStatus("That is not a URL - use Search to find a podcast by name")
         }
     }
 
     private fun addFeed(url: String) {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return
-        statusMessage = "Fetching feed…"
+        showStatus("Fetching feed…")
         showAddFeed = false
         feedUrlField = ""
         podcastResults = emptyList()
@@ -552,7 +564,7 @@ class MainActivity : ComponentActivity() {
                 "Couldn't add feed: ${e.javaClass.simpleName}: ${e.message}"
             }
             runOnUiThread {
-                statusMessage = message
+                showStatus(message)
                 browseCache.remove(MusicService.CAT_PODCASTS)
                 loadCurrent()
             }
@@ -585,7 +597,14 @@ class MainActivity : ComponentActivity() {
             SessionCommand(MusicService.COMMAND_SLEEP_TIMER, Bundle.EMPTY),
             Bundle().apply { putInt(MusicService.ARG_SLEEP_MINUTES, next) },
         )
-        statusMessage = if (next == 0) "Sleep timer off" else "Sleeping in $next min"
+        showStatus(if (next == 0) "Sleep timer off" else "Sleeping in $next min")
+    }
+
+    /** Transient feedback: shown as a snackbar and cleared on its own. */
+    private fun showStatus(message: String) {
+        statusMessage = message
+        tickHandler.removeCallbacks(statusClear)
+        tickHandler.postDelayed(statusClear, 4_000L)
     }
 
     private fun refreshPosition() {
@@ -652,23 +671,58 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            if (showAddFeed) AddFeedPanel()
-            actionTarget?.let { QueueActionsPanel(it) }
+            // Filtering an episode list is the one place a second tab row earns
+            // its height: a long feed is mostly things you have already heard
+            if (section == Section.PODCASTS && currentStack.isNotEmpty()) {
+                PrimaryTabRowMMD(selectedTabIndex = episodeFilter) {
+                    listOf("All", "Unplayed", "Started").forEachIndexed { index, label ->
+                        TabMMD(
+                            selected = episodeFilter == index,
+                            onClick = { episodeFilter = index },
+                            text = {
+                                TextMMD(label, style = MaterialTheme.typography.labelMedium)
+                            },
+                        )
+                    }
+                }
+            }
+
             StatusLine()
 
             Box(modifier = Modifier.weight(1f)) {
                 if (section == Section.SEARCH) SearchScreen() else BrowseList()
+
+                if (statusMessage.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(12.dp),
+                    ) {
+                        SnackbarMMD {
+                            TextMMD(
+                                text = statusMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
             }
 
             if (hasMedia) MiniPlayer()
             BottomNav()
         }
+
+        // Sheets rather than inline panels, which used to shove the list around
+        if (showAddFeed) AddFeedSheet()
+        actionTarget?.let { QueueActionsSheet(it) }
     }
 
     @Composable
     private fun StatusLine() {
         val text = when {
-            statusMessage.isNotEmpty() -> statusMessage
+            errorMessage.isNotEmpty() -> errorMessage
             loading -> "Loading…"
             else -> ""
         }
@@ -691,9 +745,10 @@ class MainActivity : ComponentActivity() {
             // over-reacting to a gesture
             scrollStep = 3,
         ) {
-            itemsIndexed(rows) { index, item ->
+            val visible = visibleRows
+            itemsIndexed(visible) { index, item ->
                 BrowseRow(item)
-                if (index < rows.lastIndex) HorizontalDividerMMD()
+                if (index < visible.lastIndex) HorizontalDividerMMD()
             }
         }
     }
@@ -747,7 +802,17 @@ class MainActivity : ComponentActivity() {
         val inverted = isCurrent || pressed
         val background = if (inverted) black else white
         val foreground = if (inverted) white else black
-        val subtitle = item.mediaMetadata.subtitle?.toString() ?: ""
+
+        val extras = item.mediaMetadata.extras
+        val progress = extras?.getFloat(MusicService.EXTRA_PROGRESS) ?: 0f
+        val played = extras?.getBoolean(MusicService.EXTRA_PLAYED) ?: false
+
+        val baseSubtitle = item.mediaMetadata.subtitle?.toString() ?: ""
+        val subtitle = if (played && progress <= 0f) {
+            listOf("Played", baseSubtitle).filter { it.isNotEmpty() }.joinToString(" - ")
+        } else {
+            baseSubtitle
+        }
 
         Column(
             modifier = Modifier
@@ -782,6 +847,14 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (progress > 0f) {
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicatorMMD(
+                    progress = { progress },
+                    color = foreground,
+                    borderColor = foreground,
                 )
             }
         }
@@ -1016,74 +1089,91 @@ class MainActivity : ComponentActivity() {
     // ---------- Panels ----------
 
     @Composable
-    private fun QueueActionsPanel(item: MediaItem) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(white)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+    private fun QueueActionsSheet(item: MediaItem) {
+        ModalBottomSheetMMD(
+            onDismissRequest = { actionTarget = null },
+            sheetState = rememberModalBottomSheetMMDState(),
         ) {
-            TextMMD(
-                text = item.mediaMetadata.title?.toString() ?: "",
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(12.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                val queueIndex = queueIndexOf(item.mediaId)
-                if (queueIndex != null) {
-                    SmallAction("Remove", Modifier.weight(1f)) { removeFromQueue(queueIndex) }
-                    SmallAction("Clear all", Modifier.weight(1f)) { clearQueue() }
-                } else {
-                    SmallAction("Play next", Modifier.weight(1f)) { playNext(item) }
-                    SmallAction("Queue", Modifier.weight(1f)) { addToQueue(item) }
+                TextMMD(
+                    text = item.mediaMetadata.title?.toString() ?: "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val queueIndex = queueIndexOf(item.mediaId)
+                    if (queueIndex != null) {
+                        SmallAction("Remove", Modifier.weight(1f)) {
+                            removeFromQueue(queueIndex)
+                        }
+                        SmallAction("Clear all", Modifier.weight(1f)) { clearQueue() }
+                    } else {
+                        SmallAction("Play next", Modifier.weight(1f)) { playNext(item) }
+                        SmallAction("Queue", Modifier.weight(1f)) { addToQueue(item) }
+                    }
                 }
-                SmallAction("Cancel", Modifier.weight(1f)) { actionTarget = null }
+                Spacer(Modifier.height(16.dp))
             }
         }
-        HorizontalDividerMMD()
     }
 
     @Composable
-    private fun AddFeedPanel() {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(white)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+    private fun AddFeedSheet() {
+        ModalBottomSheetMMD(
+            onDismissRequest = { showAddFeed = false },
+            sheetState = rememberModalBottomSheetMMDState(),
         ) {
-            TextFieldMMD(
-                value = feedUrlField,
-                onValueChange = { feedUrlField = it },
-                label = {
-                    TextMMD(
-                        "Search, or paste a feed URL",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Uri,
-                    imeAction = ImeAction.Search,
-                ),
-                keyboardActions = KeyboardActions(onSearch = { onFeedInputSubmitted() }),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(12.dp))
-            ButtonMMD(
-                onClick = { onFeedInputSubmitted() },
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .defaultMinSize(minHeight = 48.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                TextMMD("Search")
+                TextMMD(
+                    text = "Add a podcast",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.height(4.dp))
+                TextMMD(
+                    text = "Paste a feed URL, or use Search to find one by name",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(16.dp))
+
+                TextFieldMMD(
+                    value = feedUrlField,
+                    onValueChange = { feedUrlField = it },
+                    label = {
+                        TextMMD("Feed URL", style = MaterialTheme.typography.labelMedium)
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Go,
+                    ),
+                    keyboardActions = KeyboardActions(onGo = { onFeedInputSubmitted() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                ButtonMMD(
+                    onClick = { onFeedInputSubmitted() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 48.dp),
+                ) {
+                    TextMMD("Subscribe")
+                }
+                Spacer(Modifier.height(16.dp))
             }
         }
-        HorizontalDividerMMD()
     }
 
     // ---------- Search ----------

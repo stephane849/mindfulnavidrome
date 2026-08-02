@@ -93,6 +93,10 @@ class MusicService : MediaLibraryService() {
         /** Custom session command, so the sleep timer survives the app closing. */
         const val COMMAND_SLEEP_TIMER = "com.stephane.naviplayer.SLEEP_TIMER"
         const val ARG_SLEEP_MINUTES = "minutes"
+
+        /** Carried in MediaMetadata extras to the browsing client. */
+        const val EXTRA_PROGRESS = "progress"
+        const val EXTRA_PLAYED = "played"
     }
 
     private lateinit var player: ExoPlayer
@@ -293,7 +297,11 @@ class MusicService : MediaLibraryService() {
         ) {
             // A track that ran to its end is finished, not paused partway
             if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
-                oldPosition.mediaItem?.mediaId?.let { resume.clear(songIdOf(it)) }
+                oldPosition.mediaItem?.mediaId?.let {
+                    val songId = songIdOf(it)
+                    resume.clear(songId)
+                    resume.markPlayed(songId)
+                }
             }
         }
 
@@ -585,6 +593,8 @@ class MusicService : MediaLibraryService() {
                             trackId(parentId, episode.id),
                             episode.title,
                             episodeSubtitle(episode),
+                            progressOf(episode.id, episode.durationSec),
+                            resume.isPlayed(episode.id),
                         )
                     }
                 }
@@ -609,6 +619,8 @@ class MusicService : MediaLibraryService() {
                             trackId(parentId, song.id),
                             song.title,
                             trackSubtitle(song, showArtist),
+                            progressOf(song.id, song.duration),
+                            resume.isPlayed(song.id),
                         )
                     }
                 }
@@ -748,18 +760,41 @@ class MusicService : MediaLibraryService() {
             )
             .build()
 
-    private fun playableItem(id: String, title: String, subtitle: String) =
-        MediaItem.Builder()
-            .setMediaId(id)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(title)
-                    .setSubtitle(subtitle)
-                    .setIsBrowsable(false)
-                    .setIsPlayable(true)
-                    .build()
-            )
-            .build()
+    /**
+     * Progress and played state travel in the metadata extras so the list can
+     * draw a progress bar and filter episodes without asking the service again.
+     */
+    private fun playableItem(
+        id: String,
+        title: String,
+        subtitle: String,
+        progress: Float = 0f,
+        played: Boolean = false,
+    ) = MediaItem.Builder()
+        .setMediaId(id)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(title)
+                .setSubtitle(subtitle)
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setExtras(
+                    Bundle().apply {
+                        putFloat(EXTRA_PROGRESS, progress)
+                        putBoolean(EXTRA_PLAYED, played)
+                    }
+                )
+                .build()
+        )
+        .build()
+
+    /** Fraction of a track already heard, 0 when it has not been started. */
+    private fun progressOf(songId: String, durationSec: Int): Float {
+        if (durationSec <= 0) return 0f
+        val saved = resume.position(songId)
+        if (saved <= 0L) return 0f
+        return (saved.toFloat() / (durationSec * 1000f)).coerceIn(0f, 1f)
+    }
 
     // ---------- Small helpers ----------
 
