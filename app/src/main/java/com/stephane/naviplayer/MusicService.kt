@@ -2,6 +2,7 @@ package com.stephane.naviplayer
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -23,6 +24,8 @@ import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionCommand
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -86,6 +89,10 @@ class MusicService : MediaLibraryService() {
 
         /** How old a cached feed may get before it is refreshed behind you. */
         private const val FEED_REFRESH_MS = 30 * 60 * 1000L
+
+        /** Custom session command, so the sleep timer survives the app closing. */
+        const val COMMAND_SLEEP_TIMER = "com.stephane.naviplayer.SLEEP_TIMER"
+        const val ARG_SLEEP_MINUTES = "minutes"
     }
 
     private lateinit var player: ExoPlayer
@@ -111,6 +118,9 @@ class MusicService : MediaLibraryService() {
     private var songCache: Pair<String, List<Song>>? = null
 
     private var retries = 0
+
+    /** Wall-clock time the sleep timer fires, or 0 when it is off. */
+    private var sleepAtMs = 0L
 
     /** Set when a new item starts, consumed once it is ready enough to seek. */
     private var pendingResumeMediaId: String? = null
@@ -388,7 +398,55 @@ class MusicService : MediaLibraryService() {
 
     // ---------- Browse tree ----------
 
+    // ---------- Sleep timer ----------
+
+    /**
+     * Lives in the service rather than the activity so it keeps running with
+     * the screen off and the app closed, which is the only time it is useful.
+     */
+    private val sleepRunnable = Runnable {
+        player.pause()
+        sleepAtMs = 0L
+    }
+
+    private fun setSleepTimer(minutes: Int) {
+        handler.removeCallbacks(sleepRunnable)
+        if (minutes <= 0) {
+            sleepAtMs = 0L
+            return
+        }
+        val delay = minutes * 60_000L
+        sleepAtMs = System.currentTimeMillis() + delay
+        handler.postDelayed(sleepRunnable, delay)
+    }
+
     private inner class LibraryCallback : MediaLibrarySession.Callback {
+
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                .buildUpon()
+                .add(SessionCommand(COMMAND_SLEEP_TIMER, Bundle.EMPTY))
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(commands)
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == COMMAND_SLEEP_TIMER) {
+                setSleepTimer(args.getInt(ARG_SLEEP_MINUTES, 0))
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
 
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,

@@ -20,7 +20,9 @@ data class Song(
     val title: String,
     val artist: String,
     val album: String,
-    val duration: Int
+    val duration: Int,
+    /** Needed to build a playable media id for a song found through search. */
+    val albumId: String = "",
 )
 
 /**
@@ -115,8 +117,24 @@ class NavidromeApi(context: Context) {
         title = s.optString("title", "Untitled"),
         artist = s.optString("artist", ""),
         album = s.optString("album", fallbackAlbum),
-        duration = s.optInt("duration", 0)
+        duration = s.optInt("duration", 0),
+        albumId = s.optString("albumId", "")
     )
+
+    /** Subsonic search3, used by the Search destination. */
+    fun search(query: String): List<Song> {
+        val q = URLEncoder.encode(query.trim(), "UTF-8")
+        val root = fetch(
+            "search3.view",
+            "query=$q&songCount=60&albumCount=0&artistCount=0",
+        )
+        val songs = root.optJSONObject("searchResult3")?.optJSONArray("song")
+            ?: return emptyList()
+
+        return (0 until songs.length()).map { i ->
+            parseSong(songs.getJSONObject(i), "")
+        }
+    }
 
     // ---------- Artists ----------
 
