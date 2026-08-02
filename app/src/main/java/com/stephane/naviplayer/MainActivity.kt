@@ -768,7 +768,7 @@ class MainActivity : ComponentActivity() {
                 title = {
                     TextMMD(
                         text = currentTitle,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.strong(),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -777,7 +777,7 @@ class MainActivity : ComponentActivity() {
                     if (currentStack.isNotEmpty()) {
                         TextMMD(
                             text = "Back",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelMedium.strong(),
                             modifier = Modifier
                                 .clickable { onBack() }
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -788,7 +788,7 @@ class MainActivity : ComponentActivity() {
                     if (section == Section.PODCASTS && currentStack.isEmpty()) {
                         TextMMD(
                             text = "Add",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelMedium.strong(),
                             modifier = Modifier
                                 .clickable { switchSection(Section.SEARCH) }
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -799,7 +799,7 @@ class MainActivity : ComponentActivity() {
                     if (isRadioTab) {
                         TextMMD(
                             text = "Add",
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelMedium.strong(),
                             modifier = Modifier
                                 .clickable { showAddStation = true }
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -819,7 +819,7 @@ class MainActivity : ComponentActivity() {
                             selected = libraryTab == index,
                             onClick = { selectLibraryTab(index) },
                             text = {
-                                TextMMD(label, style = MaterialTheme.typography.labelMedium)
+                                TextMMD(label, style = MaterialTheme.typography.labelMedium.strong())
                             },
                         )
                     }
@@ -835,7 +835,7 @@ class MainActivity : ComponentActivity() {
                             selected = episodeFilter == index,
                             onClick = { episodeFilter = index },
                             text = {
-                                TextMMD(label, style = MaterialTheme.typography.labelMedium)
+                                TextMMD(label, style = MaterialTheme.typography.labelMedium.strong())
                             },
                         )
                     }
@@ -936,7 +936,7 @@ class MainActivity : ComponentActivity() {
                     label
                 },
                 color = if (selected) white else black,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.strong(),
                 maxLines = 1,
             )
         }
@@ -990,7 +990,7 @@ class MainActivity : ComponentActivity() {
             TextMMD(
                 text = item.mediaMetadata.title?.toString() ?: "",
                 color = foreground,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyMedium.strong(),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1031,7 +1031,7 @@ class MainActivity : ComponentActivity() {
             Column(modifier = Modifier.weight(1f)) {
                 TextMMD(
                     text = nowPlayingTitle ?: "Nothing playing",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.strong(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1078,14 +1078,14 @@ class MainActivity : ComponentActivity() {
                 title = {
                     TextMMD(
                         text = "Now playing",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleMedium.strong(),
                         maxLines = 1,
                     )
                 },
                 navigationIcon = {
                     TextMMD(
                         text = "Close",
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelMedium.strong(),
                         modifier = Modifier
                             .clickable { showNowPlaying = false }
                             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1103,7 +1103,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 TextMMD(
                     text = nowPlayingTitle ?: "Nothing playing",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleLarge.strong(),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1285,7 +1285,7 @@ class MainActivity : ComponentActivity() {
             modifier = modifier.defaultMinSize(minHeight = minHeight),
             contentPadding = PaddingValues(2.dp),
         ) {
-            TextMMD(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            TextMMD(label, style = MaterialTheme.typography.labelMedium.strong(), maxLines = 1)
         }
     }
 
@@ -1299,7 +1299,7 @@ class MainActivity : ComponentActivity() {
             modifier = modifier.defaultMinSize(minHeight = 48.dp),
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
         ) {
-            TextMMD(text = label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            TextMMD(text = label, style = MaterialTheme.typography.labelMedium.strong(), maxLines = 1)
         }
     }
 
@@ -1321,7 +1321,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 TextMMD(
                     text = item.mediaMetadata.title?.toString() ?: "",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.strong(),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1373,7 +1373,7 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                TextMMD("Add a station", style = MaterialTheme.typography.bodyMedium)
+                TextMMD("Add a station", style = MaterialTheme.typography.bodyMedium.strong())
                 Spacer(Modifier.height(12.dp))
 
                 TextFieldMMD(
@@ -1407,7 +1407,7 @@ class MainActivity : ComponentActivity() {
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 48.dp),
                 ) {
-                    TextMMD("Add")
+                    TextMMD("Add", style = MaterialTheme.typography.labelLarge.strong())
                 }
                 Spacer(Modifier.height(16.dp))
             }
@@ -1439,7 +1439,7 @@ class MainActivity : ComponentActivity() {
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 48.dp),
                 ) {
-                    TextMMD("Search")
+                    TextMMD("Search", style = MaterialTheme.typography.labelLarge.strong())
                 }
             }
             HorizontalDividerMMD()
@@ -1481,7 +1481,7 @@ class MainActivity : ComponentActivity() {
     private fun SectionHeading(label: String) {
         TextMMD(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.strong(),
             modifier = Modifier
                 .fillMaxWidth()
                 .background(black)
@@ -1508,7 +1508,7 @@ class MainActivity : ComponentActivity() {
             TextMMD(
                 text = title,
                 color = foreground,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyMedium.strong(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1548,7 +1548,7 @@ class MainActivity : ComponentActivity() {
                 .background(white)
                 .padding(horizontal = 16.dp, vertical = 16.dp),
         ) {
-            TextMMD("It crashed", style = MaterialTheme.typography.titleLarge)
+            TextMMD("It crashed", style = MaterialTheme.typography.titleLarge.strong())
             Spacer(Modifier.height(4.dp))
             TextMMD(
                 "Copy this and send it over - it says what went wrong.",
@@ -1627,7 +1627,7 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 24.dp),
         ) {
-            TextMMD("Navi player", style = MaterialTheme.typography.headlineLarge)
+            TextMMD("Navi player", style = MaterialTheme.typography.headlineLarge.strong())
             Spacer(Modifier.height(24.dp))
 
             TextFieldMMD(
@@ -1681,7 +1681,7 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .defaultMinSize(minHeight = 48.dp),
             ) {
-                TextMMD("Connect")
+                TextMMD("Connect", style = MaterialTheme.typography.labelLarge.strong())
             }
 
             if (loginStatus.isNotEmpty()) {
