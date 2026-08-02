@@ -918,6 +918,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * The current destination is marked by weight and an underline rather than
+     * by filling the cell black. A solid black block is the loudest mark on the
+     * screen, and spending it on the bar you are already looking at drew the eye
+     * downwards, away from the content. The underline is MMD's own tab
+     * indicator: 3dp, square-ended.
+     */
     @Composable
     private fun RowScope.NavItem(label: String, target: Section) {
         val selected = section == target
@@ -925,7 +932,7 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier
                 .weight(1f)
                 .defaultMinSize(minHeight = 48.dp)
-                .background(if (selected) black else white)
+                .background(white)
                 .clickable { switchSection(target) },
             contentAlignment = Alignment.Center,
         ) {
@@ -935,10 +942,26 @@ class MainActivity : ComponentActivity() {
                 } else {
                     label
                 },
-                color = if (selected) white else black,
-                style = MaterialTheme.typography.labelSmall.strong(),
+                color = black,
+                // Bold against regular, rather than Black against bold: at this
+                // size Black closes up, and the underline is carrying the mark
+                // anyway
+                style = if (selected) {
+                    MaterialTheme.typography.labelSmall.strong()
+                } else {
+                    MaterialTheme.typography.labelSmall
+                },
                 maxLines = 1,
             )
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(black),
+                )
+            }
         }
     }
 
