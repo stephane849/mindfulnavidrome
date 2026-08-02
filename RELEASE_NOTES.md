@@ -45,6 +45,20 @@ subscribed to in the app: search a directory by name or paste a feed URL. Feeds
 are cached and refreshed behind you, and episodes stream from their own host.
 Episode lists filter by All, Unplayed or Started.
 
+## Radio
+
+Navidrome implements the Subsonic internet radio endpoints properly, so stations
+are the server's — the same list its web UI shows — and sit as a fourth Library
+tab beside Playlists. Adding one from the phone writes it back to Navidrome,
+which may refuse if the account is not an admin; its own message is what shows.
+
+A live stream is not a short file, so the parts that assume one are off for it:
+nothing is transcoded, no resume point is kept, and there is no seek bar, no
+±15 and no playback speed — play/pause alone, with the sleep timer, which is the
+one control radio needs more rather than less. Starting a station plays that
+station rather than loading every other one behind something that never ends.
+Stations that announce their current track over ICY show it under the name.
+
 ## Design
 
 Presented with [Mudita Mindful Design](https://github.com/mudita/MMD), the
