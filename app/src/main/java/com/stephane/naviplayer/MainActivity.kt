@@ -953,22 +953,21 @@ class MainActivity : ComponentActivity() {
                 },
                 maxLines = 1,
             )
-            if (selected) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .background(black),
-                )
-            }
+            if (selected) SelectionUnderline()
         }
     }
 
     /**
      * Two lines of type, no colour: hierarchy comes from size alone, because
-     * MMD has no grey. Inverts while pressed as well as while playing - with
-     * ripple disabled globally there is otherwise no sign a tap registered.
+     * MMD has no grey.
+     *
+     * Playing and pressed used to share one mark - the row filled black either
+     * way - so they were indistinguishable, and the playing one sat filled
+     * permanently, which is the worst thing to leave on an E-Ink panel. Now the
+     * fill means only *your finger is here*, which is what an inversion is good
+     * at, and the row that is playing is marked down its leading edge with its
+     * title a weight heavier. Only one row is ever current, so the heaviest
+     * weight reads as a marker rather than as the wall it would be stacked.
      */
     @Composable
     private fun BrowseRow(item: MediaItem) {
@@ -977,9 +976,8 @@ class MainActivity : ComponentActivity() {
         val pressed by interaction.collectIsPressedAsState()
 
         val isCurrent = item.mediaId.isNotEmpty() && item.mediaId == playingMediaId
-        val inverted = isCurrent || pressed
-        val background = if (inverted) black else white
-        val foreground = if (inverted) white else black
+        val background = if (pressed) black else white
+        val foreground = if (pressed) white else black
 
         val extras = item.mediaMetadata.extras
         val progress = extras?.getFloat(MusicService.EXTRA_PROGRESS) ?: 0f
@@ -992,7 +990,7 @@ class MainActivity : ComponentActivity() {
             baseSubtitle
         }
 
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(background)
@@ -1007,33 +1005,46 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 )
-                .defaultMinSize(minHeight = 48.dp)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .defaultMinSize(minHeight = 48.dp),
         ) {
-            TextMMD(
-                text = item.mediaMetadata.title?.toString() ?: "",
-                color = foreground,
-                style = MaterialTheme.typography.bodyMedium.strong(),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (subtitle.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
+            // Sits in the row's existing 16dp margin, so nothing shifts when a
+            // different row becomes the current one
+            if (isCurrent && !pressed) LeadingMark()
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
                 TextMMD(
-                    text = subtitle,
+                    text = item.mediaMetadata.title?.toString() ?: "",
                     color = foreground,
-                    style = MaterialTheme.typography.bodySmall,
+                    style = if (isCurrent) {
+                        MaterialTheme.typography.bodyMedium.heavy()
+                    } else {
+                        MaterialTheme.typography.bodyMedium.strong()
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-            if (progress > 0f) {
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicatorMMD(
-                    progress = { progress },
-                    color = foreground,
-                    borderColor = foreground,
-                )
+                if (subtitle.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    TextMMD(
+                        text = subtitle,
+                        color = foreground,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (progress > 0f) {
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicatorMMD(
+                        progress = { progress },
+                        color = foreground,
+                        borderColor = foreground,
+                    )
+                }
             }
         }
     }
@@ -1500,6 +1511,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * A rule and a weight rather than a black band. The band put the loudest
+     * mark on the screen behind the least important text on it, and left a
+     * ghost across the width of the list it was scrolling over.
+     */
     @Composable
     private fun SectionHeading(label: String) {
         TextMMD(
@@ -1507,10 +1523,11 @@ class MainActivity : ComponentActivity() {
             style = MaterialTheme.typography.labelSmall.strong(),
             modifier = Modifier
                 .fillMaxWidth()
-                .background(black)
+                .background(white)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            color = white,
+            color = black,
         )
+        HorizontalDividerMMD()
     }
 
     @Composable
