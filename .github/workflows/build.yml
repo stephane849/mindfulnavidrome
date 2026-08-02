@@ -5,6 +5,11 @@ on:
     branches: [ main ]
     tags: [ 'v*' ]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a release at this tag, e.g. v3.0. Leave empty to only build.'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -42,16 +47,19 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      # Tag pushes publish a release with the APK attached, so downloads do not
-      # depend on Actions artifacts, which expire and need a login to fetch.
+      # A release carries the APK itself, so downloading it needs no login and
+      # does not expire the way an Actions artifact does. Either push a version
+      # tag, or run this workflow by hand and name the tag — in the second case
+      # the release creates the tag at the commit that was just built.
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk \
-             "navi-player-${GITHUB_REF_NAME}.apk"
-          gh release create "${GITHUB_REF_NAME}" \
-            "navi-player-${GITHUB_REF_NAME}.apk" \
-            --title "Navi player ${GITHUB_REF_NAME}" \
+          cp app/build/outputs/apk/debug/app-debug.apk "navi-player-${TAG}.apk"
+          gh release create "${TAG}" \
+            "navi-player-${TAG}.apk" \
+            --target "${GITHUB_SHA}" \
+            --title "Navi player ${TAG}" \
             --notes-file RELEASE_NOTES.md
