@@ -225,7 +225,16 @@ class MusicService : MediaLibraryService() {
             }
         )
 
-        restoreQueue()
+        // Restoring saved state runs while the service is being created, so
+        // anything thrown here is a crash before the app can open - and no
+        // saved queue is worth that. Drop it and carry on.
+        try {
+            restoreQueue()
+        } catch (e: Exception) {
+            Log.e(TAG, "could not restore the saved queue, dropping it", e)
+            queueStore.clear()
+            queueSnapshot = emptyList()
+        }
     }
 
     /**
@@ -237,22 +246,44 @@ class MusicService : MediaLibraryService() {
         if (player.mediaItemCount > 0) return
         val saved = queueStore.load() ?: return
 
-        val items = saved.entries.map { entry ->
-            MediaItem.Builder()
-                .setMediaId(entry.mediaId)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(entry.title)
-                        .setSubtitle(entry.subtitle)
-                        .setIsBrowsable(false)
-                        .setIsPlayable(true)
-                        .build()
-                )
-                .build()
+        // These go straight onto the player rather than arriving from a
+        // controller, so onAddMediaItems never sees them and nothing else will
+        // attach a URL. setMediaItems builds its media sources there and then,
+        // and an item with no URI takes the service down as it is created -
+        // which meant one saved queue made the app unopenable.
+        val entries = mutableListOf<QueueEntry>()
+        val items = mutableListOf<MediaItem>()
+        for (entry in saved.entries) {
+            val uri = streamUriFor(entry.mediaId) ?: continue
+            entries.add(entry)
+            items.add(
+                MediaItem.Builder()
+                    .setMediaId(entry.mediaId)
+                    .setUri(uri)
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(entry.title)
+                            .setSubtitle(entry.subtitle)
+                            .setIsBrowsable(false)
+                            .setIsPlayable(true)
+                            .build()
+                    )
+                    .build()
+            )
         }
 
-        queueSnapshot = saved.entries
-        player.setMediaItems(items, saved.index, saved.positionMs)
+        if (items.isEmpty()) {
+            queueStore.clear()
+            return
+        }
+
+        queueSnapshot = entries
+        // Re-clamped, because anything that would not resolve has been dropped
+        player.setMediaItems(
+            items,
+            saved.index.coerceIn(0, items.lastIndex),
+            saved.positionMs,
+        )
     }
 
     /** Snapshots the queue for the browse tree and writes it to disk. */
