@@ -508,18 +508,20 @@ class MainActivity : ComponentActivity() {
 
     // ---------- Queue ----------
 
+    /**
+     * Queueing adds and nothing else. It used to start playing when the queue
+     * was empty, which meant lining up a few episodes before a walk began the
+     * first one over whatever you were already doing. An empty queue is not a
+     * reason to assume you meant play - that is what tapping the row is for.
+     *
+     * The session prepares an idle player when play is finally pressed, so
+     * leaving it unprepared here costs nothing.
+     */
     private fun addToQueue(item: MediaItem) {
         val browser = this.browser ?: return
         actionTarget = null
-        if (browser.mediaItemCount == 0) {
-            browser.setMediaItem(item)
-            browser.prepare()
-            browser.play()
-            showStatus("Playing ${item.mediaMetadata.title}")
-        } else {
-            browser.addMediaItem(item)
-            showStatus("Queued ${item.mediaMetadata.title}")
-        }
+        browser.addMediaItem(item)
+        showStatus("Queued ${item.mediaMetadata.title}")
     }
 
     private fun playNext(item: MediaItem) {
@@ -698,6 +700,30 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshRadio() {
         browseCache.remove(MusicService.CAT_RADIO)
+        loadCurrent()
+    }
+
+    // ---------- Feeds ----------
+
+    /** A subscription row in the Podcasts list, as opposed to an episode. */
+    private fun isFeedRow(item: MediaItem): Boolean =
+        item.mediaId.startsWith(MusicService.PREFIX_PODCAST) &&
+            item.mediaMetadata.isBrowsable == true
+
+    /**
+     * Unsubscribing is local - the feed belongs to nobody but this phone - but
+     * it throws away the episode cache and every resume point becomes
+     * unreachable, so it takes a second tap like deleting a station does.
+     */
+    private fun unsubscribe(item: MediaItem) {
+        val feedId = item.mediaId.removePrefix(MusicService.PREFIX_PODCAST)
+        val title = item.mediaMetadata.title?.toString() ?: "podcast"
+        actionTarget = null
+        deleteArmed = false
+
+        PodcastStore(this).remove(feedId)
+        showStatus("Unsubscribed from $title")
+        browseCache.remove(MusicService.CAT_PODCASTS)
         loadCurrent()
     }
 
@@ -999,7 +1025,9 @@ class MainActivity : ComponentActivity() {
                     indication = null,
                     onClick = { onRowTapped(item) },
                     onLongClick = {
-                        if (item.mediaMetadata.isPlayable == true) {
+                        // A subscribed feed is browsable rather than playable,
+                        // so gating on playable alone left no way to hold it
+                        if (item.mediaMetadata.isPlayable == true || isFeedRow(item)) {
                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             actionTarget = item
                         }
@@ -1353,12 +1381,17 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
+                // Uncapped: rows have one line to spend on a title and podcast
+                // episodes routinely need three, so holding one is how you read
+                // the rest of it
                 TextMMD(
                     text = item.mediaMetadata.title?.toString() ?: "",
                     style = MaterialTheme.typography.bodyMedium.strong(),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
+                item.mediaMetadata.subtitle?.toString()?.takeIf { it.isNotEmpty() }?.let {
+                    Spacer(Modifier.height(4.dp))
+                    TextMMD(text = it, style = MaterialTheme.typography.bodySmall)
+                }
                 Spacer(Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1376,6 +1409,14 @@ class MainActivity : ComponentActivity() {
                                 Modifier.weight(1f),
                             ) {
                                 if (deleteArmed) deleteStation(item) else deleteArmed = true
+                            }
+
+                        isFeedRow(item) ->
+                            SmallAction(
+                                if (deleteArmed) "Tap again to remove" else "Unsubscribe",
+                                Modifier.weight(1f),
+                            ) {
+                                if (deleteArmed) unsubscribe(item) else deleteArmed = true
                             }
 
                         queueIndex != null -> {
