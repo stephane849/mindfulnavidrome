@@ -11,6 +11,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -64,6 +65,7 @@ class MusicService : MediaLibraryService() {
 
         const val MEDIA_ID_ROOT = "root"
 
+        const val CAT_QUEUE = "cat/queue"
         const val CAT_ARTISTS = "cat/artists"
         const val CAT_ALBUMS = "cat/albums"
         const val CAT_PLAYLISTS = "cat/playlists"
@@ -75,8 +77,15 @@ class MusicService : MediaLibraryService() {
         const val PREFIX_PODCAST = "podcast/"
         const val PREFIX_TRACK = "track/"
 
+        /** Queue rows address a position, not an identity: the same episode
+         *  may legitimately appear in the queue more than once. */
+        const val PREFIX_QUEUE = "queue/"
+
         /** Whole lists cross a Binder transaction, which caps out around 1MB. */
         private const val MAX_ITEMS = 300
+
+        /** How old a cached feed may get before it is refreshed behind you. */
+        private const val FEED_REFRESH_MS = 30 * 60 * 1000L
     }
 
     private lateinit var player: ExoPlayer
@@ -84,6 +93,15 @@ class MusicService : MediaLibraryService() {
     private lateinit var api: NavidromeApi
     private lateinit var resume: ResumeStore
     private lateinit var podcasts: PodcastStore
+    private lateinit var queueStore: QueueStore
+
+    /**
+     * The queue as the browse tree sees it. Kept in a field because childrenOf
+     * runs on a background executor and the player may only be read from the
+     * application thread.
+     */
+    @Volatile
+    private var queueSnapshot: List<QueueEntry> = emptyList()
 
     private val handler = Handler(Looper.getMainLooper())
     private val browseExecutor: ListeningExecutorService =
@@ -109,6 +127,7 @@ class MusicService : MediaLibraryService() {
         api = NavidromeApi(this)
         resume = ResumeStore(this)
         podcasts = PodcastStore(this)
+        queueStore = QueueStore(this)
 
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("NaviPlayer")
@@ -167,6 +186,53 @@ class MusicService : MediaLibraryService() {
                 setSmallIcon(R.drawable.ic_note)
             }
         )
+
+        restoreQueue()
+    }
+
+    /**
+     * Puts a saved queue back into the player without preparing or playing it,
+     * so reopening the app never starts audio by itself. The first play
+     * prepares whatever is sitting there.
+     */
+    private fun restoreQueue() {
+        if (player.mediaItemCount > 0) return
+        val saved = queueStore.load() ?: return
+
+        val items = saved.entries.map { entry ->
+            MediaItem.Builder()
+                .setMediaId(entry.mediaId)
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(entry.title)
+                        .setSubtitle(entry.subtitle)
+                        .setIsBrowsable(false)
+                        .setIsPlayable(true)
+                        .build()
+                )
+                .build()
+        }
+
+        queueSnapshot = saved.entries
+        player.setMediaItems(items, saved.index, saved.positionMs)
+    }
+
+    /** Snapshots the queue for the browse tree and writes it to disk. */
+    private fun captureQueue() {
+        val entries = (0 until player.mediaItemCount).map { i ->
+            val item = player.getMediaItemAt(i)
+            QueueEntry(
+                mediaId = item.mediaId,
+                title = item.mediaMetadata.title?.toString() ?: "",
+                subtitle = item.mediaMetadata.subtitle?.toString() ?: "",
+            )
+        }
+        queueSnapshot = entries
+        queueStore.save(
+            entries,
+            player.currentMediaItemIndex,
+            player.currentPosition.coerceAtLeast(0L),
+        )
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession =
@@ -181,6 +247,7 @@ class MusicService : MediaLibraryService() {
 
     override fun onDestroy() {
         savePosition()
+        captureQueue()
         handler.removeCallbacks(positionSaver)
         session.release()
         player.release()
@@ -202,6 +269,11 @@ class MusicService : MediaLibraryService() {
             // throughout, so onPlaybackStateChanged never fires and the resume
             // point for the new track would otherwise be ignored.
             if (player.playbackState == Player.STATE_READY) applyPendingResume()
+            captureQueue()
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            captureQueue()
         }
 
         override fun onPositionDiscontinuity(
@@ -368,8 +440,10 @@ class MusicService : MediaLibraryService() {
     }
 
     private fun childrenOf(parentId: String): List<MediaItem> {
-        // Podcasts come from their own hosts, so they work with no server at all
+        // Podcasts come from their own hosts and the queue is local, so neither
+        // needs a server
         val needsServer = parentId != MEDIA_ID_ROOT &&
+            parentId != CAT_QUEUE &&
             parentId != CAT_PODCASTS &&
             !parentId.startsWith(PREFIX_PODCAST)
         if (needsServer && !api.isConfigured()) {
@@ -417,6 +491,16 @@ class MusicService : MediaLibraryService() {
                     )
                 }
 
+                // Read from the snapshot, never the player: this runs on the
+                // browse executor and the player is main-thread only.
+                parentId == CAT_QUEUE -> queueSnapshot.mapIndexed { index, entry ->
+                    playableItem(
+                        PREFIX_QUEUE + index,
+                        entry.title.ifEmpty { "Untitled" },
+                        entry.subtitle,
+                    )
+                }
+
                 parentId == CAT_PODCASTS -> podcasts.feeds().map { feed ->
                     browsableItem(
                         PREFIX_PODCAST + feed.id,
@@ -425,17 +509,17 @@ class MusicService : MediaLibraryService() {
                     )
                 }
 
-                // Opening a feed refreshes it; the cached copy is the fallback
-                // so a flaky connection still shows what you already had.
+                // Cached episodes are served straight away and the feed is
+                // refreshed behind them. Fetching and re-parsing a whole RSS
+                // document before showing anything made opening a large feed
+                // feel broken.
                 parentId.startsWith(PREFIX_PODCAST) -> {
                     val feedId = parentId.removePrefix(PREFIX_PODCAST)
                     val cached = podcasts.feed(feedId)
-                    val feed = try {
-                        cached?.url?.takeIf { it.isNotEmpty() }
-                            ?.let { PodcastFeed.fetch(it).also { fresh -> podcasts.save(fresh) } }
-                            ?: cached
-                    } catch (e: Exception) {
-                        Log.w(TAG, "refresh failed for $feedId, using cache", e)
+                    val feed = if (cached == null || cached.episodes.isEmpty()) {
+                        refreshFeed(cached, feedId)
+                    } else {
+                        if (isStale(cached)) refreshInBackground(cached)
                         cached
                     }
                     feed?.episodes.orEmpty().map { episode ->
@@ -509,6 +593,17 @@ class MusicService : MediaLibraryService() {
             items.add(playableItem(lastId, "Continue listening", subtitle))
         }
 
+        val queued = queueSnapshot
+        if (queued.isNotEmpty()) {
+            items.add(
+                browsableItem(
+                    CAT_QUEUE,
+                    "Queue",
+                    plural(queued.size, "item", "items"),
+                )
+            )
+        }
+
         items.add(browsableItem(CAT_ARTISTS, "Artists", "Browse by artist"))
         items.add(browsableItem(CAT_ALBUMS, "Albums", "Every album"))
         items.add(browsableItem(CAT_PLAYLISTS, "Playlists", "Your Navidrome playlists"))
@@ -520,6 +615,36 @@ class MusicService : MediaLibraryService() {
             )
         )
         return items
+    }
+
+    private fun isStale(feed: Feed): Boolean =
+        System.currentTimeMillis() - feed.refreshedAt > FEED_REFRESH_MS
+
+    /** Blocking refresh, used only when there is nothing cached to show. */
+    private fun refreshFeed(cached: Feed?, feedId: String): Feed? {
+        val url = cached?.url?.takeIf { it.isNotEmpty() } ?: return cached
+        return try {
+            PodcastFeed.fetch(url).also { podcasts.save(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "refresh failed for $feedId, using cache", e)
+            cached
+        }
+    }
+
+    private fun refreshInBackground(feed: Feed) {
+        if (feed.url.isEmpty()) return
+        browseExecutor.execute {
+            try {
+                podcasts.save(PodcastFeed.fetch(feed.url))
+                // Nudge any attached browser so the list picks up new episodes.
+                // Session methods must run on the application thread.
+                handler.post {
+                    session.notifyChildrenChanged(PREFIX_PODCAST + feed.id, Int.MAX_VALUE, null)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "background refresh failed for ${feed.id}", e)
+            }
+        }
     }
 
     private fun episodeSubtitle(episode: Episode): String {

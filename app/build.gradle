@@ -39,7 +39,11 @@ android {
         // TopAppBarMMD and TextFieldMMD expose experimental Material 3 types.
         // Media3's @UnstableApi needs no counterpart here: it is a plain Java
         // annotation, not a Kotlin opt-in marker, so kotlinc does not gate on it.
-        freeCompilerArgs += ['-opt-in=androidx.compose.material3.ExperimentalMaterial3Api']
+        freeCompilerArgs += [
+            '-opt-in=androidx.compose.material3.ExperimentalMaterial3Api',
+            // combinedClickable, for long-press queue actions
+            '-opt-in=androidx.compose.foundation.ExperimentalFoundationApi',
+        ]
     }
 }
 

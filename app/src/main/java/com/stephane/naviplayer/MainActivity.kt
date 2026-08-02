@@ -59,6 +59,8 @@ import com.mudita.mmd.components.text.TextMMD
 import com.mudita.mmd.components.text_field.TextFieldMMD
 import com.mudita.mmd.components.top_app_bar.TopAppBarMMD
 import com.mudita.mmd.white
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.combinedClickable
 
 /**
  * Browses and controls playback through a Media3 MediaBrowser, which is also a
@@ -121,6 +123,10 @@ class MainActivity : ComponentActivity() {
     private var showAddFeed by mutableStateOf(false)
     private var feedUrlField by mutableStateOf("")
     private var searchResults by mutableStateOf<List<PodcastResult>>(emptyList())
+
+    /** The row a long-press opened the queue actions for. */
+    private var actionTarget by mutableStateOf<MediaItem?>(null)
+    private var queueCount by mutableStateOf(0)
 
     private var serverField by mutableStateOf("")
     private var usernameField by mutableStateOf("")
@@ -232,8 +238,70 @@ class MainActivity : ComponentActivity() {
         playingMediaId = player.currentMediaItem?.mediaId
         nowPlayingTitle = player.currentMediaItem?.mediaMetadata?.title?.toString()
         durationMs = player.duration.let { if (it == C.TIME_UNSET) 0L else it }
+        queueCount = player.mediaItemCount
         refreshPosition()
     }
+
+    // ---------- Queue ----------
+
+    private fun addToQueue(item: MediaItem) {
+        val browser = this.browser ?: return
+        actionTarget = null
+
+        if (browser.mediaItemCount == 0) {
+            // Nothing playing yet, so queueing means starting
+            browser.setMediaItem(item)
+            browser.prepare()
+            browser.play()
+            statusMessage = "Playing ${item.mediaMetadata.title}"
+        } else {
+            browser.addMediaItem(item)
+            statusMessage = "Queued ${item.mediaMetadata.title}"
+        }
+    }
+
+    private fun playNext(item: MediaItem) {
+        val browser = this.browser ?: return
+        actionTarget = null
+
+        if (browser.mediaItemCount == 0) {
+            addToQueue(item)
+            return
+        }
+        browser.addMediaItem(browser.currentMediaItemIndex + 1, item)
+        statusMessage = "Playing next: ${item.mediaMetadata.title}"
+    }
+
+    private fun clearQueue() {
+        val browser = this.browser ?: return
+        actionTarget = null
+        browser.clearMediaItems()
+        statusMessage = "Queue cleared"
+        if (currentMediaId == MusicService.CAT_QUEUE) goUp()
+    }
+
+    private fun removeFromQueue(index: Int) {
+        val browser = this.browser ?: return
+        actionTarget = null
+        if (index !in 0 until browser.mediaItemCount) return
+        browser.removeMediaItem(index)
+        statusMessage = "Removed from queue"
+        loadCurrent()
+    }
+
+    private fun openQueue() {
+        if (currentMediaId == MusicService.CAT_QUEUE) return
+        stack.add(MusicService.CAT_QUEUE to "Queue")
+        loadCurrent()
+    }
+
+    /** Index carried by a `queue/<n>` row, or null for anything else. */
+    private fun queueIndexOf(mediaId: String): Int? =
+        if (mediaId.startsWith(MusicService.PREFIX_QUEUE)) {
+            mediaId.removePrefix(MusicService.PREFIX_QUEUE).toIntOrNull()
+        } else {
+            null
+        }
 
     // ---------- Browsing ----------
 
@@ -338,6 +406,13 @@ class MainActivity : ComponentActivity() {
         val mediaId = item.mediaId
         if (mediaId.isEmpty()) return
         val meta = item.mediaMetadata
+
+        // A queue row addresses a position in the player, not a thing to play
+        queueIndexOf(mediaId)?.let { index ->
+            browser?.seekTo(index, 0L)
+            browser?.play()
+            return
+        }
 
         when {
             meta.isBrowsable == true -> {
@@ -534,6 +609,7 @@ class MainActivity : ComponentActivity() {
             )
 
             if (showAddFeed) AddFeedPanel()
+            actionTarget?.let { QueueActionsPanel(it) }
 
             if (statusMessage.isNotEmpty()) {
                 TextMMD(
@@ -577,7 +653,14 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier
                 .fillMaxWidth()
                 .background(background)
-                .clickable { onRowTapped(item) }
+                .combinedClickable(
+                    onClick = { onRowTapped(item) },
+                    // Long-press opens the queue actions, but only for things
+                    // that can actually be queued
+                    onLongClick = {
+                        if (item.mediaMetadata.isPlayable == true) actionTarget = item
+                    },
+                )
                 .defaultMinSize(minHeight = 48.dp)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
@@ -620,12 +703,30 @@ class MainActivity : ComponentActivity() {
         ) {
             HorizontalDividerMMD()
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                TextMMD(
-                    text = line ?: "Nothing playing",
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextMMD(
+                        text = line ?: "Nothing playing",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (queueCount > 1) {
+                        // Opens the queue rather than clearing it: clearing on
+                        // a stray tap here would be far too easy
+                        TextMMD(
+                            text = "$queueCount queued",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .clickable { openQueue() }
+                                .padding(start = 12.dp),
+                        )
+                    }
+                }
 
                 // Scrubbing updates only local state; the seek happens on
                 // release, so dragging costs one E-Ink refresh rather than one
@@ -676,6 +777,44 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    private fun QueueActionsPanel(item: MediaItem) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(white)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            TextMMD(
+                text = item.mediaMetadata.title?.toString() ?: "",
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val queueIndex = queueIndexOf(item.mediaId)
+                if (queueIndex != null) {
+                    // Already in the queue, so the useful action is removal
+                    TransportButton("Remove", Modifier.weight(1f), primary = true) {
+                        removeFromQueue(queueIndex)
+                    }
+                    TransportButton("Clear all", Modifier.weight(1f)) { clearQueue() }
+                } else {
+                    TransportButton("Play next", Modifier.weight(1f)) { playNext(item) }
+                    TransportButton("Queue", Modifier.weight(1f), primary = true) {
+                        addToQueue(item)
+                    }
+                }
+                TransportButton("Cancel", Modifier.weight(1f)) { actionTarget = null }
+            }
+        }
+        HorizontalDividerMMD()
     }
 
     @Composable
