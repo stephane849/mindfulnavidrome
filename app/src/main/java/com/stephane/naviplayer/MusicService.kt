@@ -139,6 +139,11 @@ class MusicService : MediaLibraryService() {
     /** Last container fetched, so tapping a track does not refetch its list. */
     private var songCache: Pair<String, List<Song>>? = null
 
+    private val playerListener = PlayerListener()
+
+    /** Set in onDestroy, so late callbacks never touch a released session. */
+    private var released = false
+
     private var retries = 0
 
     /** Wall-clock time the sleep timer fires, or 0 when it is off. */
@@ -202,7 +207,7 @@ class MusicService : MediaLibraryService() {
             .setSeekForwardIncrementMs(SEEK_STEP_MS)
             .build()
 
-        player.addListener(PlayerListener())
+        player.addListener(playerListener)
 
         session = MediaLibrarySession.Builder(this, player, LibraryCallback())
             .setSessionActivity(
@@ -282,6 +287,11 @@ class MusicService : MediaLibraryService() {
         savePosition()
         captureQueue()
         handler.removeCallbacks(positionSaver)
+        // Releasing the player delivers a last round of callbacks, and anything
+        // that touches the session from one of those would hit a released
+        // session. Stop listening before tearing either down.
+        player.removeListener(playerListener)
+        released = true
         session.release()
         player.release()
         browseExecutor.shutdown()
@@ -429,7 +439,7 @@ class MusicService : MediaLibraryService() {
     private fun publishStreamTitle(title: String) {
         // The player has listeners attached before the session exists, and
         // restoring a saved queue can transition an item on the way through
-        if (!::session.isInitialized) return
+        if (!::session.isInitialized || released) return
         if (title == streamTitle) return
         streamTitle = title
         session.setSessionExtras(Bundle().apply { putString(EXTRA_STREAM_TITLE, title) })
@@ -561,9 +571,22 @@ class MusicService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> {
-            val resolved = mediaItems.mapTo(mutableListOf()) { item ->
-                val uri = if (item.localConfiguration != null) null else streamUriFor(item.mediaId)
-                if (uri == null) item else item.buildUpon().setUri(uri).build()
+            val resolved = mutableListOf<MediaItem>()
+            for (item in mediaItems) {
+                if (item.localConfiguration != null) {
+                    resolved.add(item)
+                    continue
+                }
+                val uri = streamUriFor(item.mediaId)
+                if (uri == null) {
+                    // Handing back an item with no URI crashes ExoPlayer when it
+                    // prepares: it requires a localConfiguration. A station
+                    // deleted on the server, or a feed whose cache was cleared,
+                    // is a normal thing to hit - drop it instead.
+                    Log.w(TAG, "no stream for ${item.mediaId}, skipping")
+                    continue
+                }
+                resolved.add(item.buildUpon().setUri(uri).build())
             }
             return Futures.immediateFuture(resolved)
         }

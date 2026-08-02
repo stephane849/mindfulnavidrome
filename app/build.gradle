@@ -15,12 +15,15 @@ android {
         applicationId "com.stephane.naviplayer"
         minSdk 24
         targetSdk 34
-        versionCode 5
-        versionName "3.2"
+        versionCode 6
+        versionName "3.3"
     }
 
     buildFeatures {
         compose true
+        // Off by default in AGP 8; the crash report names the version it came
+        // from, which matters when the APK is sideloaded from a release
+        buildConfig true
     }
 
     // A fixed debug key, committed on purpose. Without it every CI run

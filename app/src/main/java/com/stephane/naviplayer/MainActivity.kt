@@ -46,7 +46,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -154,6 +156,9 @@ class MainActivity : ComponentActivity() {
     private var queueCount by mutableStateOf(0)
     private var speed by mutableStateOf(1.0f)
     private var sleepMinutes by mutableStateOf(0)
+
+    /** The stack trace of the last crash, shown once and then cleared. */
+    private var crashReport by mutableStateOf("")
 
     private var showLogin by mutableStateOf(true)
     private var loginStatus by mutableStateOf("")
@@ -278,12 +283,15 @@ class MainActivity : ComponentActivity() {
             showLogin = false
         }
 
+        crashReport = CrashLog.read(this)
+
         setContent {
             ThemeMMD {
                 BackHandler(enabled = !showLogin && (showNowPlaying || currentStack.isNotEmpty())) {
                     onBack()
                 }
                 when {
+                    crashReport.isNotEmpty() -> CrashScreen()
                     showLogin -> LoginScreen()
                     showNowPlaying -> NowPlayingScreen()
                     else -> MainShell()
@@ -1508,6 +1516,55 @@ class MainActivity : ComponentActivity() {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+        }
+    }
+
+    // ---------- Crash report ----------
+
+    /**
+     * Shown once after a crash, ahead of everything else. Sideloaded builds
+     * have no adb behind them, so this is the only way the trace gets off the
+     * phone - hence Copy rather than just Dismiss.
+     */
+    @Composable
+    private fun CrashScreen() {
+        val clipboard = LocalClipboardManager.current
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(white)
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+        ) {
+            TextMMD("It crashed", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(4.dp))
+            TextMMD(
+                "Copy this and send it over - it says what went wrong.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(12.dp))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                TextMMD(text = crashReport, style = MaterialTheme.typography.labelSmall)
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SmallAction("Copy", Modifier.weight(1f)) {
+                    clipboard.setText(AnnotatedString(crashReport))
+                }
+                SmallAction("Dismiss", Modifier.weight(1f)) {
+                    CrashLog.clear(this@MainActivity)
+                    crashReport = ""
+                }
             }
         }
     }
