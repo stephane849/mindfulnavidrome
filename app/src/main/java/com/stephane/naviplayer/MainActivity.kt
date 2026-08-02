@@ -8,11 +8,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaControllerCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -44,6 +39,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.session.MediaBrowser
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
 import com.mudita.mmd.ThemeMMD
 import com.mudita.mmd.black
 import com.mudita.mmd.components.buttons.ButtonMMD
@@ -56,9 +58,10 @@ import com.mudita.mmd.components.top_app_bar.TopAppBarMMD
 import com.mudita.mmd.white
 
 /**
- * Browses through MediaBrowserCompat and drives playback through
- * MediaControllerCompat. Holds no MediaPlayer of its own, so closing this
- * screen does not stop the music.
+ * Browses and controls playback through a Media3 MediaBrowser, which is also a
+ * Player - so transport state, position and the current item all come from the
+ * one object. Holds no player of its own, so closing this screen does not stop
+ * the music.
  *
  * Presented with Mudita Mindful Design: [ThemeMMD] supplies the pure black and
  * white E-Ink colour scheme, the Lato type scale and a globally disabled
@@ -79,8 +82,8 @@ class MainActivity : ComponentActivity() {
         private const val TICK_MS = 15_000L
     }
 
-    private lateinit var browser: MediaBrowserCompat
-    private var controller: MediaControllerCompat? = null
+    private var browserFuture: ListenableFuture<MediaBrowser>? = null
+    private var browser: MediaBrowser? = null
     private lateinit var api: NavidromeApi
 
     /** Breadcrumb of (mediaId, screen title) - last entry is what is on screen. */
@@ -88,11 +91,13 @@ class MainActivity : ComponentActivity() {
 
     // ---------- Everything the UI reads ----------
 
-    private var rows by mutableStateOf<List<MediaBrowserCompat.MediaItem>>(emptyList())
+    private var rows by mutableStateOf<List<MediaItem>>(emptyList())
     private var playingMediaId by mutableStateOf<String?>(null)
-    private var playbackState by mutableStateOf<PlaybackStateCompat?>(null)
-    private var metadata by mutableStateOf<MediaMetadataCompat?>(null)
+    private var isPlaying by mutableStateOf(false)
+    private var isBuffering by mutableStateOf(false)
+    private var nowPlayingTitle by mutableStateOf<String?>(null)
     private var positionMs by mutableStateOf(0L)
+    private var durationMs by mutableStateOf(0L)
     private var screenTitle by mutableStateOf(ROOT_TITLE)
     private var canGoUp by mutableStateOf(false)
     private var showLogin by mutableStateOf(true)
@@ -101,10 +106,17 @@ class MainActivity : ComponentActivity() {
     private var serverField by mutableStateOf("")
     private var usernameField by mutableStateOf("")
     private var passwordField by mutableStateOf("")
+    private var bitrateField by mutableStateOf(NavidromeApi.DEFAULT_BITRATE.toString())
 
     private val tickHandler = Handler(Looper.getMainLooper())
     private val positionTick = object : Runnable {
         override fun run() = refreshPosition()
+    }
+
+    private val playerListener = object : Player.Listener {
+        override fun onEvents(player: Player, events: Player.Events) {
+            syncFromPlayer(player)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -114,18 +126,12 @@ class MainActivity : ComponentActivity() {
         api = NavidromeApi(this)
         requestNotificationPermissionIfNeeded()
 
-        browser = MediaBrowserCompat(
-            this,
-            ComponentName(this, MusicService::class.java),
-            connectionCallback,
-            null
-        )
-
         if (api.isConfigured()) {
             val prefs = getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE)
             serverField = api.server
             usernameField = prefs.getString("username", "") ?: ""
             passwordField = prefs.getString("password", "") ?: ""
+            bitrateField = api.maxBitRate.toString()
             showLogin = false
         }
 
@@ -139,108 +145,118 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (!browser.isConnected) browser.connect()
+        connectBrowser()
     }
 
     override fun onStop() {
         super.onStop()
         tickHandler.removeCallbacks(positionTick)
-        controller?.unregisterCallback(controllerCallback)
-        if (stack.isNotEmpty()) browser.unsubscribe(stack.last().first)
-        browser.disconnect()
+        browser?.removeListener(playerListener)
+        browserFuture?.let { MediaBrowser.releaseFuture(it) }
+        browserFuture = null
+        browser = null
     }
 
     // ---------- Service connection ----------
 
-    private val connectionCallback = object : MediaBrowserCompat.ConnectionCallback() {
-        override fun onConnected() {
-            val ctrl = MediaControllerCompat(this@MainActivity, browser.sessionToken)
-            MediaControllerCompat.setMediaController(this@MainActivity, ctrl)
-            ctrl.registerCallback(controllerCallback)
-            controller = ctrl
+    private fun connectBrowser() {
+        val token = SessionToken(this, ComponentName(this, MusicService::class.java))
+        val future = MediaBrowser.Builder(this, token).buildAsync()
+        browserFuture = future
+        future.addListener(
+            {
+                val connected = try {
+                    future.get()
+                } catch (e: Exception) {
+                    loginStatus = "Playback service unavailable"
+                    return@addListener
+                }
+                browser = connected
+                connected.addListener(playerListener)
+                syncFromPlayer(connected)
 
-            playbackState = ctrl.playbackState
-            metadata = ctrl.metadata
-            playingMediaId = ctrl.metadata?.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID)
-            refreshPosition()
-
-            if (api.isConfigured()) {
-                if (stack.isEmpty()) stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
-                subscribeCurrent()
-            }
-        }
-
-        override fun onConnectionFailed() {
-            loginStatus = "Playback service unavailable"
-        }
+                if (api.isConfigured()) {
+                    if (stack.isEmpty()) stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
+                    loadCurrent()
+                }
+            },
+            MoreExecutors.directExecutor(),
+        )
     }
 
-    private val controllerCallback = object : MediaControllerCompat.Callback() {
-        override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
-            playbackState = state
-            refreshPosition()
-        }
-
-        override fun onMetadataChanged(md: MediaMetadataCompat?) {
-            metadata = md
-            playingMediaId = md?.getString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID)
-        }
+    private fun syncFromPlayer(player: Player) {
+        isPlaying = player.isPlaying
+        isBuffering = player.playbackState == Player.STATE_BUFFERING
+        playingMediaId = player.currentMediaItem?.mediaId
+        nowPlayingTitle = player.currentMediaItem?.mediaMetadata?.title?.toString()
+        durationMs = player.duration.let { if (it == C.TIME_UNSET) 0L else it }
+        refreshPosition()
     }
 
     // ---------- Browsing ----------
 
-    private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
-        override fun onChildrenLoaded(
-            parentId: String,
-            children: MutableList<MediaBrowserCompat.MediaItem>
-        ) {
-            if (stack.isEmpty() || parentId != stack.last().first) return
-            rows = children
-            if (children.isEmpty()) {
-                Toast.makeText(this@MainActivity, "Nothing here", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        override fun onError(parentId: String) {
-            if (!api.isConfigured()) {
-                loginStatus = "Enter your server details"
-                showLogin = true
-            } else {
-                Toast.makeText(
-                    this@MainActivity,
-                    "Couldn't reach the server",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-
-    private fun subscribeCurrent() {
+    private fun loadCurrent() {
+        val browser = this.browser ?: return
         val (mediaId, title) = stack.last()
+
         rows = emptyList()
         canGoUp = stack.size > 1
         screenTitle = title
-        browser.unsubscribe(mediaId)
-        browser.subscribe(mediaId, subscriptionCallback)
+
+        val future = browser.getChildren(mediaId, 0, Int.MAX_VALUE, null)
+        future.addListener(
+            {
+                val children = try {
+                    future.get().value ?: emptyList()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Couldn't reach the server", Toast.LENGTH_LONG).show()
+                    return@addListener
+                }
+                if (stack.isNotEmpty() && stack.last().first == mediaId) {
+                    rows = children
+                    if (children.isEmpty()) {
+                        Toast.makeText(this, "Nothing here", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            MoreExecutors.directExecutor(),
+        )
     }
 
-    private fun onRowTapped(item: MediaBrowserCompat.MediaItem) {
-        val mediaId = item.mediaId ?: return
+    private fun onRowTapped(item: MediaItem) {
+        val mediaId = item.mediaId
+        if (mediaId.isEmpty()) return
 
-        if (item.isBrowsable) {
-            browser.unsubscribe(stack.last().first)
-            stack.add(mediaId to (item.description.title?.toString() ?: ""))
-            subscribeCurrent()
+        if (item.mediaMetadata.isBrowsable == true) {
+            stack.add(mediaId to (item.mediaMetadata.title?.toString() ?: ""))
+            loadCurrent()
         } else {
-            controller?.transportControls?.playFromMediaId(mediaId, null)
+            play(item)
         }
+    }
+
+    /**
+     * Queue the whole list the track came from, so next/previous walk the album
+     * or playlist exactly as they did before. ExoPlayer owns the queue now.
+     */
+    private fun play(item: MediaItem) {
+        val browser = this.browser ?: return
+        val playables = rows.filter { it.mediaMetadata.isPlayable == true }
+        val startIndex = playables.indexOfFirst { it.mediaId == item.mediaId }
+
+        if (startIndex < 0) {
+            browser.setMediaItem(item)
+        } else {
+            browser.setMediaItems(playables, startIndex, C.TIME_UNSET)
+        }
+        browser.prepare()
+        browser.play()
     }
 
     private fun goUp() {
         if (stack.size <= 1) return
-        browser.unsubscribe(stack.last().first)
         stack.removeAt(stack.size - 1)
-        subscribeCurrent()
+        loadCurrent()
     }
 
     // ---------- Login ----------
@@ -259,45 +275,29 @@ class MainActivity : ComponentActivity() {
             .putString("server", server)
             .putString("username", username)
             .putString("password", password)
+            .putInt("max_bitrate", bitrateField.trim().toIntOrNull() ?: NavidromeApi.DEFAULT_BITRATE)
             .apply()
 
         loginStatus = ""
         showLogin = false
         stack.clear()
         stack.add(MusicService.MEDIA_ID_ROOT to ROOT_TITLE)
-        if (browser.isConnected) subscribeCurrent() else browser.connect()
+        if (browser == null) connectBrowser() else loadCurrent()
     }
 
     // ---------- Transport ----------
 
     private fun togglePlayPause() {
-        val ctrl = controller ?: return
-        if (ctrl.playbackState?.state == PlaybackStateCompat.STATE_PLAYING) {
-            ctrl.transportControls.pause()
-        } else {
-            ctrl.transportControls.play()
-        }
-    }
-
-    /**
-     * The session only publishes a position when the state changes, so between
-     * updates it has to be extrapolated from the wall clock.
-     */
-    private fun elapsedMs(state: PlaybackStateCompat?): Long {
-        if (state == null) return 0L
-        var position = state.position
-        if (state.state == PlaybackStateCompat.STATE_PLAYING) {
-            val drift = SystemClock.elapsedRealtime() - state.lastPositionUpdateTime
-            position += (drift * state.playbackSpeed).toLong()
-        }
-        return if (position < 0L) 0L else position
+        val browser = this.browser ?: return
+        if (browser.isPlaying) browser.pause() else browser.play()
     }
 
     /** Publishes the position and re-arms the tick, but only while playing. */
     private fun refreshPosition() {
         tickHandler.removeCallbacks(positionTick)
-        positionMs = elapsedMs(playbackState)
-        if (playbackState?.state == PlaybackStateCompat.STATE_PLAYING) {
+        val browser = this.browser ?: return
+        positionMs = browser.currentPosition.coerceAtLeast(0L)
+        if (browser.isPlaying) {
             tickHandler.postDelayed(positionTick, TICK_MS)
         }
     }
@@ -342,6 +342,21 @@ class MainActivity : ComponentActivity() {
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(16.dp))
+
+            TextFieldMMD(
+                value = bitrateField,
+                onValueChange = { bitrateField = it },
+                label = {
+                    TextMMD(
+                        "Max kbps, 0 for original",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(24.dp))
@@ -412,11 +427,11 @@ class MainActivity : ComponentActivity() {
      * playing inverts to white on black, which is the only selection cue.
      */
     @Composable
-    private fun BrowseRow(item: MediaBrowserCompat.MediaItem) {
-        val isPlaying = item.mediaId != null && item.mediaId == playingMediaId
-        val background = if (isPlaying) black else white
-        val foreground = if (isPlaying) white else black
-        val subtitle = item.description.subtitle?.toString() ?: ""
+    private fun BrowseRow(item: MediaItem) {
+        val isCurrent = item.mediaId.isNotEmpty() && item.mediaId == playingMediaId
+        val background = if (isCurrent) black else white
+        val foreground = if (isCurrent) white else black
+        val subtitle = item.mediaMetadata.subtitle?.toString() ?: ""
 
         Column(
             modifier = Modifier
@@ -427,7 +442,7 @@ class MainActivity : ComponentActivity() {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             TextMMD(
-                text = item.description.title?.toString() ?: "",
+                text = item.mediaMetadata.title?.toString() ?: "",
                 color = foreground,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
@@ -448,18 +463,13 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun TransportBar() {
-        val state = playbackState
-        val playing = state?.state == PlaybackStateCompat.STATE_PLAYING
-        val totalMs = metadata?.getLong(MediaMetadataCompat.METADATA_KEY_DURATION) ?: 0L
-        val title = metadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)
-
         // Clock first: the line is single-line and a long lecture title would
         // otherwise push the time off the end of the screen.
         val line = when {
-            !title.isNullOrEmpty() && totalMs > 0L ->
-                "${formatClockMs(positionMs)} / ${formatClockMs(totalMs)}   $title"
-            !title.isNullOrEmpty() -> title
-            state?.state == PlaybackStateCompat.STATE_BUFFERING -> "Loading"
+            !nowPlayingTitle.isNullOrEmpty() && durationMs > 0L ->
+                "${formatClockMs(positionMs)} / ${formatClockMs(durationMs)}   $nowPlayingTitle"
+            !nowPlayingTitle.isNullOrEmpty() -> nowPlayingTitle
+            isBuffering -> "Loading"
             else -> "Nothing playing"
         }
 
@@ -471,7 +481,7 @@ class MainActivity : ComponentActivity() {
             HorizontalDividerMMD()
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                 TextMMD(
-                    text = line,
+                    text = line ?: "Nothing playing",
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -482,21 +492,21 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TransportButton("Prev", Modifier.weight(1f)) {
-                        controller?.transportControls?.skipToPrevious()
+                        browser?.seekToPreviousMediaItem()
                     }
                     TransportButton("-15", Modifier.weight(1f)) {
-                        controller?.transportControls?.rewind()
+                        browser?.seekBack()
                     }
                     TransportButton(
-                        label = if (playing) "Pause" else "Play",
+                        label = if (isPlaying) "Pause" else "Play",
                         modifier = Modifier.weight(1f),
                         primary = true,
                     ) { togglePlayPause() }
                     TransportButton("+15", Modifier.weight(1f)) {
-                        controller?.transportControls?.fastForward()
+                        browser?.seekForward()
                     }
                     TransportButton("Next", Modifier.weight(1f)) {
-                        controller?.transportControls?.skipToNext()
+                        browser?.seekToNextMediaItem()
                     }
                 }
             }

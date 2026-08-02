@@ -39,6 +39,9 @@ class NavidromeApi(context: Context) {
         /** Subsonic caps getAlbumList2 at 500 per call. */
         private const val PAGE_SIZE = 500
         private const val MAX_PAGES = 10
+
+        /** kbps ceiling for spoken word; 0 means stream the original file. */
+        const val DEFAULT_BITRATE = 96
     }
 
     val server: String
@@ -49,6 +52,14 @@ class NavidromeApi(context: Context) {
 
     private val password: String
         get() = prefs.getString("password", "") ?: ""
+
+    /**
+     * Ceiling for transcoded streams, in kbps; 0 streams the original file.
+     * Speech carries fine well below music bitrates, and a 90-minute lecture at
+     * full quality is a lot of data for no audible gain.
+     */
+    val maxBitRate: Int
+        get() = prefs.getInt("max_bitrate", DEFAULT_BITRATE)
 
     fun isConfigured(): Boolean =
         server.isNotEmpty() && username.isNotEmpty() && password.isNotEmpty()
@@ -62,7 +73,9 @@ class NavidromeApi(context: Context) {
 
     fun streamUrl(songId: String): String {
         val id = URLEncoder.encode(songId, "UTF-8")
-        return "$server/rest/stream.view?id=$id&${authParams()}"
+        val rate = maxBitRate
+        val transcode = if (rate > 0) "&format=mp3&maxBitRate=$rate" else ""
+        return "$server/rest/stream.view?id=$id$transcode&${authParams()}"
     }
 
     private fun fetch(path: String, query: String): JSONObject {
