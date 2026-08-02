@@ -3,11 +3,16 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Needed only by the release step, which runs on tags
+    permissions:
+      contents: write
 
     steps:
       - name: Check out the code
@@ -36,3 +41,17 @@ jobs:
           name: navi-player-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # Tag pushes publish a release with the APK attached, so downloads do not
+      # depend on Actions artifacts, which expire and need a login to fetch.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "navi-player-${GITHUB_REF_NAME}.apk"
+          gh release create "${GITHUB_REF_NAME}" \
+            "navi-player-${GITHUB_REF_NAME}.apk" \
+            --title "Navi player ${GITHUB_REF_NAME}" \
+            --notes-file RELEASE_NOTES.md
