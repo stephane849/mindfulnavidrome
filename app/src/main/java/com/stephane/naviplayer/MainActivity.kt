@@ -80,8 +80,6 @@ import com.mudita.mmd.components.nav_bar.NavigationBarMMD
 import com.mudita.mmd.components.progress_indicator.LinearProgressIndicatorMMD
 import com.mudita.mmd.components.snackbar.SnackbarMMD
 import com.mudita.mmd.components.slider.SliderMMD
-import com.mudita.mmd.components.tabs.PrimaryTabRowMMD
-import com.mudita.mmd.components.tabs.TabMMD
 import com.mudita.mmd.components.text.TextMMD
 import com.mudita.mmd.components.text_field.TextFieldMMD
 import com.mudita.mmd.white
@@ -875,6 +873,50 @@ class MainActivity : ComponentActivity() {
         HorizontalDividerMMD()
     }
 
+    /**
+     * A row of tabs that fits the words in it.
+     *
+     * Hand-built, because TabMMD spends 16dp of padding on each side of its
+     * label and that figure is internal - unreachable. Four tabs across a screen
+     * this narrow get about 80dp each, so 32dp of every cell went to padding and
+     * left 48dp for the word. PLAYLISTS needs 65dp at the smallest size worth
+     * setting: it could not have fitted at any size, and shrinking the type was
+     * never going to be the fix.
+     *
+     * Same marks as everything else - MMD's 3dp indicator underneath the
+     * selected one, weight carrying the rest.
+     */
+    @Composable
+    private fun TabBar(labels: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(white),
+        ) {
+            labels.forEachIndexed { index, label ->
+                val selected = index == selectedIndex
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .defaultMinSize(minHeight = 44.dp)
+                        .clickable { onSelect(index) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    TextMMD(
+                        text = label.uppercase(),
+                        color = black,
+                        style = MaterialTheme.typography.labelSmall.chromeTight(bold = selected),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 2.dp),
+                    )
+                    if (selected) SelectionUnderline()
+                }
+            }
+        }
+        HorizontalDividerMMD()
+    }
+
     /** A bar action: a word you can tap, sized for a thumb. */
     @Composable
     private fun BarAction(label: String, onClick: () -> Unit) {
@@ -919,48 +961,26 @@ class MainActivity : ComponentActivity() {
                 },
             )
 
-            // Tabs replace a whole level of drilling in the library
+            // Tabs replace a whole level of drilling in the library. Radio
+            // belongs here rather than in the bottom bar: stations are the
+            // server's, alongside albums and playlists, and a fifth destination
+            // would not fit this screen's width.
             if (section == Section.LIBRARY && currentStack.isEmpty()) {
-                PrimaryTabRowMMD(selectedTabIndex = libraryTab) {
-                    // Radio belongs here rather than in the bottom bar: stations
-                    // are the server's, alongside albums and playlists, and a
-                    // fifth destination would not fit this screen's width.
-                    listOf("Artists", "Albums", "Playlists", "Radio").forEachIndexed { index, label ->
-                        TabMMD(
-                            selected = libraryTab == index,
-                            onClick = { selectLibraryTab(index) },
-                            text = {
-                                TextMMD(
-                                    text = label.uppercase(),
-                                    style = MaterialTheme.typography.labelSmall.chromeTight(),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
-                            },
-                        )
-                    }
-                }
+                TabBar(
+                    labels = listOf("Artists", "Albums", "Playlists", "Radio"),
+                    selectedIndex = libraryTab,
+                    onSelect = { selectLibraryTab(it) },
+                )
             }
 
             // Filtering an episode list is the one place a second tab row earns
             // its height: a long feed is mostly things you have already heard
             if (section == Section.PODCASTS && currentStack.isNotEmpty()) {
-                PrimaryTabRowMMD(selectedTabIndex = episodeFilter) {
-                    listOf("All", "Unplayed", "Started").forEachIndexed { index, label ->
-                        TabMMD(
-                            selected = episodeFilter == index,
-                            onClick = { episodeFilter = index },
-                            text = {
-                                TextMMD(
-                                    text = label.uppercase(),
-                                    style = MaterialTheme.typography.labelSmall.chromeTight(),
-                                    maxLines = 1,
-                                    softWrap = false,
-                                )
-                            },
-                        )
-                    }
-                }
+                TabBar(
+                    labels = listOf("All", "Unplayed", "Started"),
+                    selectedIndex = episodeFilter,
+                    onSelect = { episodeFilter = it },
+                )
             }
 
             StatusLine()
