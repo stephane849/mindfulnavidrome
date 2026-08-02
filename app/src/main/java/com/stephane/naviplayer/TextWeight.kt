@@ -23,17 +23,21 @@ import androidx.compose.ui.unit.sp
  */
 
 /**
- * Black, for type big enough to carry it - screen titles and the first line of
- * a row. Its counters stay open at 18sp and up, and it is the heaviest mark the
- * panel can hold cleanly.
+ * Black, for the one piece of type that names the screen you are on. Reserved
+ * for that: a single heaviest mark reads as a title, while a column of them
+ * reads as a wall.
  */
 fun TextStyle.heavy(): TextStyle = copy(fontWeight = FontWeight.Black)
 
 /**
- * Bold, for the small labels on tabs, navigation and controls. Black closes up
- * at label sizes and turns to a blob once dithered, so these get one step less
- * weight and a little tracking instead, which stops bold letterforms merging
- * into each other.
+ * Bold, for everything else that names rather than describes - the first line
+ * of a row, and the labels on tabs, navigation and controls.
+ *
+ * Row titles were Black briefly and it was too dense: one of them is crisp, but
+ * a screenful stacked four rows deep turns the list into a solid block. Bold
+ * still separates a title from the line under it without that. The tracking
+ * stops bold letterforms merging once the panel has dithered them, which is
+ * what small labels suffer from.
  */
 fun TextStyle.strong(): TextStyle = copy(
     fontWeight = FontWeight.Bold,

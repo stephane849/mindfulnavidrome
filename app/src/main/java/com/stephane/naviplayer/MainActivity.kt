@@ -990,7 +990,7 @@ class MainActivity : ComponentActivity() {
             TextMMD(
                 text = item.mediaMetadata.title?.toString() ?: "",
                 color = foreground,
-                style = MaterialTheme.typography.bodyMedium.heavy(),
+                style = MaterialTheme.typography.bodyMedium.strong(),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1508,7 +1508,7 @@ class MainActivity : ComponentActivity() {
             TextMMD(
                 text = title,
                 color = foreground,
-                style = MaterialTheme.typography.bodyMedium.heavy(),
+                style = MaterialTheme.typography.bodyMedium.strong(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
