@@ -229,6 +229,45 @@ class NavidromeApi(context: Context) {
         return out
     }
 
+    // ---------- Internet radio ----------
+
+    /**
+     * Navidrome implements the Subsonic radio endpoints for real, so stations
+     * are the server's, shared with its web UI - unlike podcasts, which it
+     * answers with HTTP 501 and the app has to handle itself.
+     */
+    fun getRadioStations(): List<Station> {
+        val root = fetch("getInternetRadioStations.view", "")
+        val out = mutableListOf<Station>()
+        val listArray = root.optJSONObject("internetRadioStations")
+            ?.optJSONArray("internetRadioStation") ?: return out
+
+        for (i in 0 until listArray.length()) {
+            val s = listArray.getJSONObject(i)
+            out.add(
+                Station(
+                    id = s.getString("id"),
+                    name = s.optString("name", "Untitled station"),
+                    streamUrl = s.optString("streamUrl", ""),
+                    homepageUrl = s.optString("homePageUrl", ""),
+                )
+            )
+        }
+        return out
+    }
+
+    /** Throws with the server's own message, which says so when it refuses. */
+    fun createRadioStation(name: String, streamUrl: String) {
+        val n = URLEncoder.encode(name.trim(), "UTF-8")
+        val u = URLEncoder.encode(streamUrl.trim(), "UTF-8")
+        fetch("createInternetRadioStation.view", "name=$n&streamUrl=$u")
+    }
+
+    fun deleteRadioStation(stationId: String) {
+        val id = URLEncoder.encode(stationId, "UTF-8")
+        fetch("deleteInternetRadioStation.view", "id=$id")
+    }
+
     // ---------- Tracks ----------
 
     fun getSongs(albumId: String): List<Song> {

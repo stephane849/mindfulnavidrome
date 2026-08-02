@@ -59,6 +59,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaBrowser
+import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -166,6 +167,19 @@ class MainActivity : ComponentActivity() {
 
     private var actionTarget by mutableStateOf<MediaItem?>(null)
 
+    /** True while a live stream is loaded: no duration, nothing to seek. */
+    private var isRadio by mutableStateOf(false)
+
+    /** What the station says it is playing, pushed over as session extras. */
+    private var streamTitle by mutableStateOf("")
+
+    private var showAddStation by mutableStateOf(false)
+    private var stationNameField by mutableStateOf("")
+    private var stationUrlField by mutableStateOf("")
+
+    /** Deleting a station removes it from the server, so it takes two taps. */
+    private var deleteArmed by mutableStateOf(false)
+
     private var serverField by mutableStateOf("")
     private var usernameField by mutableStateOf("")
     private var passwordField by mutableStateOf("")
@@ -183,6 +197,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val sessionListener = object : MediaBrowser.Listener {
+        override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
+            streamTitle = extras.getString(MusicService.EXTRA_STREAM_TITLE).orEmpty()
+            browser?.let { syncFromPlayer(it) }
+        }
+    }
+
     private val currentStack: MutableList<Pair<String, String>>
         get() = stacks.getValue(section)
 
@@ -191,6 +212,7 @@ class MainActivity : ComponentActivity() {
         Section.LIBRARY -> when (libraryTab) {
             1 -> MusicService.CAT_ALBUMS
             2 -> MusicService.CAT_PLAYLISTS
+            3 -> MusicService.CAT_RADIO
             else -> MusicService.CAT_ARTISTS
         }
         Section.PODCASTS -> MusicService.CAT_PODCASTS
@@ -200,6 +222,9 @@ class MainActivity : ComponentActivity() {
 
     private val currentMediaId: String
         get() = currentStack.lastOrNull()?.first ?: rootOf(section)
+
+    private val isRadioTab: Boolean
+        get() = section == Section.LIBRARY && libraryTab == 3 && currentStack.isEmpty()
 
     /** Episode filters apply only inside a podcast feed. */
     private val visibleRows: List<MediaItem>
@@ -290,7 +315,9 @@ class MainActivity : ComponentActivity() {
 
     private fun connectBrowser() {
         val token = SessionToken(this, ComponentName(this, MusicService::class.java))
-        val future = MediaBrowser.Builder(this, token).buildAsync()
+        val future = MediaBrowser.Builder(this, token)
+            .setListener(sessionListener)
+            .buildAsync()
         browserFuture = future
         future.addListener(
             {
@@ -302,6 +329,10 @@ class MainActivity : ComponentActivity() {
                 }
                 browser = connected
                 connected.addListener(playerListener)
+                // Reconnecting mid-stream should not lose the current track
+                streamTitle = connected.sessionExtras
+                    .getString(MusicService.EXTRA_STREAM_TITLE)
+                    .orEmpty()
                 syncFromPlayer(connected)
                 loadCurrent()
             },
@@ -314,8 +345,19 @@ class MainActivity : ComponentActivity() {
         isBuffering = player.playbackState == Player.STATE_BUFFERING
         hasMedia = player.mediaItemCount > 0
         playingMediaId = player.currentMediaItem?.mediaId
-        nowPlayingTitle = player.currentMediaItem?.mediaMetadata?.title?.toString()
-        nowPlayingSubtitle = player.currentMediaItem?.mediaMetadata?.subtitle?.toString()
+        isRadio = playingMediaId?.startsWith(MusicService.PREFIX_RADIO) == true
+
+        val itemTitle = player.currentMediaItem?.mediaMetadata?.title?.toString()
+        val itemSubtitle = player.currentMediaItem?.mediaMetadata?.subtitle?.toString()
+        nowPlayingTitle = itemTitle
+
+        // The station stays the title - it is the thing you chose - and
+        // whatever it says it is playing becomes the subtitle.
+        nowPlayingSubtitle = if (isRadio) {
+            streamTitle.takeIf { it.isNotBlank() && it != itemTitle } ?: itemSubtitle
+        } else {
+            itemSubtitle
+        }
         durationMs = player.duration.let { if (it == C.TIME_UNSET) 0L else it }
         queueCount = player.mediaItemCount
         speed = player.playbackParameters.speed
@@ -421,6 +463,17 @@ class MainActivity : ComponentActivity() {
 
     private fun play(item: MediaItem) {
         val browser = this.browser ?: return
+
+        // A station plays alone. Starting one the way a track starts would load
+        // every other station behind it, and since a live stream never ends,
+        // nothing would ever reach them.
+        if (item.mediaId.startsWith(MusicService.PREFIX_RADIO)) {
+            browser.setMediaItem(item)
+            browser.prepare()
+            browser.play()
+            return
+        }
+
         val playables = visibleRows.filter { it.mediaMetadata.isPlayable == true }
         val startIndex = playables.indexOfFirst { it.mediaId == item.mediaId }
 
@@ -568,6 +621,64 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
 
+    // ---------- Radio ----------
+
+    /**
+     * Writes to Navidrome rather than keeping a local list, so a station added
+     * on the phone is there in the web UI too. Navidrome may refuse if the
+     * account is not an admin, in which case its own message is what shows.
+     */
+    private fun addStation() {
+        val name = stationNameField.trim()
+        val url = stationUrlField.trim()
+        if (name.isEmpty() || url.isEmpty()) {
+            showStatus("A station needs both a name and a URL")
+            return
+        }
+        showAddStation = false
+        showStatus("Adding station…")
+
+        Thread {
+            val message = try {
+                api.createRadioStation(name, url)
+                "Added $name"
+            } catch (e: Exception) {
+                "Couldn't add station: ${e.message ?: e.javaClass.simpleName}"
+            }
+            runOnUiThread {
+                showStatus(message)
+                stationNameField = ""
+                stationUrlField = ""
+                refreshRadio()
+            }
+        }.start()
+    }
+
+    private fun deleteStation(item: MediaItem) {
+        val id = item.mediaId.removePrefix(MusicService.PREFIX_RADIO)
+        val name = item.mediaMetadata.title?.toString() ?: "station"
+        actionTarget = null
+        deleteArmed = false
+
+        Thread {
+            val message = try {
+                api.deleteRadioStation(id)
+                "Deleted $name"
+            } catch (e: Exception) {
+                "Couldn't delete: ${e.message ?: e.javaClass.simpleName}"
+            }
+            runOnUiThread {
+                showStatus(message)
+                refreshRadio()
+            }
+        }.start()
+    }
+
+    private fun refreshRadio() {
+        browseCache.remove(MusicService.CAT_RADIO)
+        loadCurrent()
+    }
+
     // ---------- Transport ----------
 
     private fun togglePlayPause() {
@@ -650,13 +761,27 @@ class MainActivity : ComponentActivity() {
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                         )
                     }
+                    // A station needs a name as well as a URL, so it gets its
+                    // own form rather than going through Search
+                    if (isRadioTab) {
+                        TextMMD(
+                            text = "Add",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier
+                                .clickable { showAddStation = true }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
+                    }
                 },
             )
 
             // Tabs replace a whole level of drilling in the library
             if (section == Section.LIBRARY && currentStack.isEmpty()) {
                 PrimaryTabRowMMD(selectedTabIndex = libraryTab) {
-                    listOf("Artists", "Albums", "Playlists").forEachIndexed { index, label ->
+                    // Radio belongs here rather than in the bottom bar: stations
+                    // are the server's, alongside albums and playlists, and a
+                    // fifth destination would not fit this screen's width.
+                    listOf("Artists", "Albums", "Playlists", "Radio").forEachIndexed { index, label ->
                         TabMMD(
                             selected = libraryTab == index,
                             onClick = { selectLibraryTab(index) },
@@ -713,6 +838,7 @@ class MainActivity : ComponentActivity() {
 
         // Sheets rather than inline panels, which used to shove the list around
         actionTarget?.let { QueueActionsSheet(it) }
+        if (showAddStation) AddStationSheet()
     }
 
     @Composable
@@ -876,7 +1002,14 @@ class MainActivity : ComponentActivity() {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (durationMs > 0L) {
+                if (isRadio) {
+                    TextMMD(
+                        text = nowPlayingSubtitle?.takeIf { it.isNotEmpty() } ?: "Live",
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else if (durationMs > 0L) {
                     TextMMD(
                         text = "${formatClockMs(positionMs)} / ${formatClockMs(durationMs)}",
                         style = MaterialTheme.typography.labelSmall,
@@ -953,7 +1086,23 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(Modifier.weight(1f))
 
-                if (durationMs > 0L) {
+                if (isRadio) {
+                    // Nothing to scrub and nothing to count down to. The clock
+                    // is time spent listening, which is what a sleep timer is
+                    // set against.
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        TextMMD(
+                            text = if (isBuffering) "Live - connecting" else "Live",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextMMD(
+                            text = formatClockMs(positionMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.End,
+                        )
+                    }
+                } else if (durationMs > 0L) {
                     SliderMMD(
                         value = if (scrubbing) {
                             scrubFraction
@@ -993,7 +1142,19 @@ class MainActivity : ComponentActivity() {
                 // One row rather than two, so the screen fits without scrolling.
                 // Play/pause still dominates through size; every icon is black
                 // on white, so all five read the same way.
-                Row(
+                //
+                // Radio gets play/pause alone: there is nothing to skip to, and
+                // +/-15 on a live stream either does nothing or drops you out
+                // of the buffer.
+                if (isRadio) {
+                    IconAction(
+                        icon = if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play,
+                        label = if (isPlaying) "Pause" else "Play",
+                        modifier = Modifier.fillMaxWidth(),
+                        minHeight = 72.dp,
+                        iconSize = 34.dp,
+                    ) { togglePlayPause() }
+                } else Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1035,8 +1196,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SmallAction("Speed ${speedLabel(speed)}", Modifier.weight(1f)) {
-                        cycleSpeed()
+                    // Speed is for recordings. Playing a live stream faster than
+                    // it arrives only empties the buffer.
+                    if (!isRadio) {
+                        SmallAction("Speed ${speedLabel(speed)}", Modifier.weight(1f)) {
+                            cycleSpeed()
+                        }
                     }
                     SmallAction(
                         if (sleepMinutes == 0) "Sleep off" else "Sleep $sleepMinutes",
@@ -1110,7 +1275,10 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun QueueActionsSheet(item: MediaItem) {
         ModalBottomSheetMMD(
-            onDismissRequest = { actionTarget = null },
+            onDismissRequest = {
+                actionTarget = null
+                deleteArmed = false
+            },
             sheetState = rememberModalBottomSheetMMDState(),
         ) {
             Column(
@@ -1130,15 +1298,83 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     val queueIndex = queueIndexOf(item.mediaId)
-                    if (queueIndex != null) {
-                        SmallAction("Remove", Modifier.weight(1f)) {
-                            removeFromQueue(queueIndex)
+                    when {
+                        // Queueing an endless stream makes no sense, so the one
+                        // useful thing to offer on a station is removing it.
+                        // That deletes it from Navidrome for everyone, hence
+                        // the second tap.
+                        item.mediaId.startsWith(MusicService.PREFIX_RADIO) ->
+                            SmallAction(
+                                if (deleteArmed) "Tap again to delete" else "Delete station",
+                                Modifier.weight(1f),
+                            ) {
+                                if (deleteArmed) deleteStation(item) else deleteArmed = true
+                            }
+
+                        queueIndex != null -> {
+                            SmallAction("Remove", Modifier.weight(1f)) {
+                                removeFromQueue(queueIndex)
+                            }
+                            SmallAction("Clear all", Modifier.weight(1f)) { clearQueue() }
                         }
-                        SmallAction("Clear all", Modifier.weight(1f)) { clearQueue() }
-                    } else {
-                        SmallAction("Play next", Modifier.weight(1f)) { playNext(item) }
-                        SmallAction("Queue", Modifier.weight(1f)) { addToQueue(item) }
+
+                        else -> {
+                            SmallAction("Play next", Modifier.weight(1f)) { playNext(item) }
+                            SmallAction("Queue", Modifier.weight(1f)) { addToQueue(item) }
+                        }
                     }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun AddStationSheet() {
+        ModalBottomSheetMMD(
+            onDismissRequest = { showAddStation = false },
+            sheetState = rememberModalBottomSheetMMDState(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                TextMMD("Add a station", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(12.dp))
+
+                TextFieldMMD(
+                    value = stationNameField,
+                    onValueChange = { stationNameField = it },
+                    label = { TextMMD("Name", style = MaterialTheme.typography.labelMedium) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+
+                TextFieldMMD(
+                    value = stationUrlField,
+                    onValueChange = { stationUrlField = it },
+                    label = {
+                        TextMMD("Stream URL", style = MaterialTheme.typography.labelMedium)
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { addStation() }),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(16.dp))
+
+                ButtonMMD(
+                    onClick = { addStation() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 48.dp),
+                ) {
+                    TextMMD("Add")
                 }
                 Spacer(Modifier.height(16.dp))
             }

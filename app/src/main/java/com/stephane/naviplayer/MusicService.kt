@@ -10,6 +10,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
@@ -19,6 +20,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.metadata.icy.IcyInfo
 import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
@@ -73,12 +75,17 @@ class MusicService : MediaLibraryService() {
         const val CAT_ALBUMS = "cat/albums"
         const val CAT_PLAYLISTS = "cat/playlists"
         const val CAT_PODCASTS = "cat/podcasts"
+        const val CAT_RADIO = "cat/radio"
 
         const val PREFIX_ARTIST = "artist/"
         const val PREFIX_ALBUM = "album/"
         const val PREFIX_PLAYLIST = "playlist/"
         const val PREFIX_PODCAST = "podcast/"
         const val PREFIX_TRACK = "track/"
+
+        /** A station is addressed directly: it has no container and, being
+         *  endless, no resume point or track list to belong to. */
+        const val PREFIX_RADIO = "radio/"
 
         /** Queue rows address a position, not an identity: the same episode
          *  may legitimately appear in the queue more than once. */
@@ -97,6 +104,16 @@ class MusicService : MediaLibraryService() {
         /** Carried in MediaMetadata extras to the browsing client. */
         const val EXTRA_PROGRESS = "progress"
         const val EXTRA_PLAYED = "played"
+
+        /**
+         * What a radio stream says it is playing right now, sent to controllers
+         * as session extras.
+         *
+         * It cannot ride on the media metadata: ExoPlayer merges in-stream
+         * metadata underneath the MediaItem's own, so the station name we set
+         * would overwrite the track title every time.
+         */
+        const val EXTRA_STREAM_TITLE = "stream_title"
     }
 
     private lateinit var player: ExoPlayer
@@ -104,6 +121,7 @@ class MusicService : MediaLibraryService() {
     private lateinit var api: NavidromeApi
     private lateinit var resume: ResumeStore
     private lateinit var podcasts: PodcastStore
+    private lateinit var radio: RadioStore
     private lateinit var queueStore: QueueStore
 
     /**
@@ -141,6 +159,7 @@ class MusicService : MediaLibraryService() {
         api = NavidromeApi(this)
         resume = ResumeStore(this)
         podcasts = PodcastStore(this)
+        radio = RadioStore(this)
         queueStore = QueueStore(this)
 
         val httpFactory = DefaultHttpDataSource.Factory()
@@ -273,9 +292,25 @@ class MusicService : MediaLibraryService() {
 
     private inner class PlayerListener : Player.Listener {
 
+        /**
+         * Shoutcast streams announce the current track in band. Only radio has
+         * this, and only some stations send it at all.
+         */
+        override fun onMetadata(metadata: Metadata) {
+            for (i in 0 until metadata.length()) {
+                val entry = metadata.get(i)
+                if (entry is IcyInfo) {
+                    publishStreamTitle(entry.title.orEmpty())
+                    return
+                }
+            }
+        }
+
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             retries = 0
             pendingResumeMediaId = mediaItem?.mediaId
+            // Whatever the last station was announcing does not describe this
+            publishStreamTitle("")
             mediaItem?.let {
                 resume.saveLast(it.mediaId, it.mediaMetadata.title?.toString() ?: "")
             }
@@ -345,6 +380,11 @@ class MusicService : MediaLibraryService() {
         val mediaId = pendingResumeMediaId ?: return
         pendingResumeMediaId = null
 
+        // Radio has nowhere to resume to. Some live streams do report a
+        // seekable window, so this is an explicit rule rather than something
+        // left to the duration check below.
+        if (isRadio(mediaId)) return
+
         // A start position given by the caller wins over the stored one
         if (player.currentPosition > 1_000L) return
 
@@ -370,6 +410,7 @@ class MusicService : MediaLibraryService() {
 
     private fun savePosition() {
         val mediaId = player.currentMediaItem?.mediaId ?: return
+        if (isRadio(mediaId)) return
         val total = player.duration
         resume.save(
             songIdOf(mediaId),
@@ -381,11 +422,34 @@ class MusicService : MediaLibraryService() {
     /** track/<container>/<songId> - the song id is everything after the last slash. */
     private fun songIdOf(mediaId: String): String = mediaId.substringAfterLast('/')
 
+    private fun isRadio(mediaId: String): Boolean = mediaId.startsWith(PREFIX_RADIO)
+
+    private var streamTitle = ""
+
+    private fun publishStreamTitle(title: String) {
+        // The player has listeners attached before the session exists, and
+        // restoring a saved queue can transition an item on the way through
+        if (!::session.isInitialized) return
+        if (title == streamTitle) return
+        streamTitle = title
+        session.setSessionExtras(Bundle().apply { putString(EXTRA_STREAM_TITLE, title) })
+    }
+
     /**
-     * Podcast episodes are hosted by whoever publishes the feed, so only
-     * Navidrome tracks go through the Subsonic stream endpoint.
+     * Podcast episodes are hosted by whoever publishes the feed and radio
+     * stations by whoever runs them, so only Navidrome tracks go through the
+     * Subsonic stream endpoint.
      */
     private fun streamUriFor(mediaId: String): String? {
+        // Deliberately not transcoded: a station's URL is the stream, and
+        // pushing it through stream.view would ask Navidrome to re-encode
+        // something it does not hold.
+        if (isRadio(mediaId)) {
+            return radio.station(mediaId.removePrefix(PREFIX_RADIO))
+                ?.streamUrl
+                ?.takeIf { it.isNotEmpty() }
+        }
+
         if (!mediaId.startsWith(PREFIX_TRACK)) return null
         val rest = mediaId.removePrefix(PREFIX_TRACK)
         val slash = rest.lastIndexOf('/')
@@ -519,8 +583,7 @@ class MusicService : MediaLibraryService() {
         return try {
             val items = loadChildren(parentId)
             when {
-                items.isEmpty() ->
-                    noticeList("Empty list", "The server returned no items for $parentId")
+                items.isEmpty() -> emptyNotice(parentId)
                 items.size > MAX_ITEMS ->
                     items.take(MAX_ITEMS) +
                         noticeItem("Showing first $MAX_ITEMS", "${items.size} items in total")
@@ -599,6 +662,19 @@ class MusicService : MediaLibraryService() {
                     }
                 }
 
+                // Stations are mirrored on the way past, so playback can
+                // resolve a stream URL later without touching the network on
+                // the application thread.
+                parentId == CAT_RADIO -> api.getRadioStations()
+                    .also { radio.replaceAll(it) }
+                    .map { station ->
+                        playableItem(
+                            PREFIX_RADIO + station.id,
+                            station.name,
+                            stationSubtitle(station),
+                        )
+                    }
+
                 parentId == CAT_PLAYLISTS -> api.getPlaylists().map { playlist ->
                     browsableItem(
                         PREFIX_PLAYLIST + playlist.id,
@@ -627,6 +703,17 @@ class MusicService : MediaLibraryService() {
 
             else -> emptyList()
         }
+
+    /**
+     * An empty list is a normal state for some categories and a symptom for
+     * others, so say which it is rather than reporting a media id at the reader.
+     */
+    private fun emptyNotice(parentId: String): List<MediaItem> = when (parentId) {
+        CAT_RADIO -> noticeList("No stations", "Add one with Add, or in Navidrome")
+        CAT_PODCASTS -> noticeList("No subscriptions", "Find a podcast under Search")
+        CAT_QUEUE -> noticeList("Queue empty", "Long-press anything playable to add it")
+        else -> noticeList("Empty list", "The server returned no items for $parentId")
+    }
 
     private fun noticeList(title: String, detail: String) = listOf(noticeItem(title, detail))
 
@@ -677,6 +764,7 @@ class MusicService : MediaLibraryService() {
         items.add(browsableItem(CAT_ARTISTS, "Artists", "Browse by artist"))
         items.add(browsableItem(CAT_ALBUMS, "Albums", "Every album"))
         items.add(browsableItem(CAT_PLAYLISTS, "Playlists", "Your Navidrome playlists"))
+        items.add(browsableItem(CAT_RADIO, "Radio", "Live stations"))
         items.add(
             browsableItem(
                 CAT_PODCASTS,
@@ -800,6 +888,16 @@ class MusicService : MediaLibraryService() {
 
     private fun plural(n: Int, one: String, many: String) =
         if (n == 1) "1 $one" else "$n $many"
+
+    /** A station has no duration to show, so name where it comes from instead. */
+    private fun stationSubtitle(station: Station): String {
+        val host = try {
+            java.net.URI(station.streamUrl).host.orEmpty().removePrefix("www.")
+        } catch (e: Exception) {
+            ""
+        }
+        return if (host.isEmpty()) "Live" else "Live - $host"
+    }
 
     private fun albumSubtitle(album: Album): String {
         val count = plural(album.songCount, "track", "tracks")
