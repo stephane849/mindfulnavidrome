@@ -930,7 +930,12 @@ class MainActivity : ComponentActivity() {
                             selected = libraryTab == index,
                             onClick = { selectLibraryTab(index) },
                             text = {
-                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelSmall.chrome(), maxLines = 1)
+                                TextMMD(
+                                    text = label.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall.chromeTight(),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
                             },
                         )
                     }
@@ -946,7 +951,12 @@ class MainActivity : ComponentActivity() {
                             selected = episodeFilter == index,
                             onClick = { episodeFilter = index },
                             text = {
-                                TextMMD(label.uppercase(), style = MaterialTheme.typography.labelSmall.chrome(), maxLines = 1)
+                                TextMMD(
+                                    text = label.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall.chromeTight(),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
                             },
                         )
                     }
@@ -1052,10 +1062,11 @@ class MainActivity : ComponentActivity() {
                 // itself, so the destination can just be the destination
                 text = label.uppercase(),
                 color = black,
+                softWrap = false,
                 // Bold against regular, rather than Black against bold: at this
                 // size Black closes up, and the underline is carrying the mark
                 // anyway
-                style = MaterialTheme.typography.labelSmall.chrome(bold = selected),
+                style = MaterialTheme.typography.labelSmall.chromeTight(bold = selected),
                 maxLines = 1,
             )
             if (selected) SelectionUnderline()

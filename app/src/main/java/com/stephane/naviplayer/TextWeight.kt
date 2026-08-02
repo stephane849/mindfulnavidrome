@@ -69,3 +69,21 @@ fun TextStyle.chrome(bold: Boolean = true): TextStyle = copy(
     fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
     letterSpacing = 0.5.sp,
 )
+
+/**
+ * Chrome that has to survive in a fixed share of the width - the tab rows and
+ * the bottom bar, which divide the screen evenly however long the words are.
+ *
+ * The screen is about 320dp across, so four tabs get 80dp each. A monospaced
+ * glyph advances 0.6em, which puts PLAYLISTS at nine characters and roughly
+ * 76dp before any padding at all: it never fitted, and shortening the word to
+ * suit the face would be the type dictating the vocabulary. Smaller and
+ * untracked instead - these are tab labels, not reading matter, and a
+ * recognisable word at 12sp beats a cryptic one at 14.
+ */
+fun TextStyle.chromeTight(bold: Boolean = true): TextStyle = copy(
+    fontFamily = FontFamily.Monospace,
+    fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+    fontSize = 12.sp,
+    letterSpacing = 0.sp,
+)
