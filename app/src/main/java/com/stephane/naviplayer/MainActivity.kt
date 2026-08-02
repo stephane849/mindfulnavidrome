@@ -8,7 +8,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -52,6 +51,7 @@ import com.mudita.mmd.components.buttons.ButtonMMD
 import com.mudita.mmd.components.buttons.OutlinedButtonMMD
 import com.mudita.mmd.components.divider.HorizontalDividerMMD
 import com.mudita.mmd.components.lazy.LazyColumnMMD
+import com.mudita.mmd.components.slider.SliderMMD
 import com.mudita.mmd.components.text.TextMMD
 import com.mudita.mmd.components.text_field.TextFieldMMD
 import com.mudita.mmd.components.top_app_bar.TopAppBarMMD
@@ -80,6 +80,9 @@ class MainActivity : ComponentActivity() {
          * redraw that ghosts on E-Ink.
          */
         private const val TICK_MS = 15_000L
+
+        /** Bounded so a large library cannot overflow the Binder transaction. */
+        private const val PAGE_SIZE = 400
     }
 
     private var browserFuture: ListenableFuture<MediaBrowser>? = null
@@ -99,9 +102,20 @@ class MainActivity : ComponentActivity() {
     private var positionMs by mutableStateOf(0L)
     private var durationMs by mutableStateOf(0L)
     private var screenTitle by mutableStateOf(ROOT_TITLE)
+    private var currentMediaId by mutableStateOf(MusicService.MEDIA_ID_ROOT)
     private var canGoUp by mutableStateOf(false)
     private var showLogin by mutableStateOf(true)
     private var loginStatus by mutableStateOf("")
+
+    /** Shown under the app bar. Never silently empty: a blank screen with no
+     *  explanation is what made the first on-device failure so hard to place. */
+    private var statusMessage by mutableStateOf("")
+
+    private var scrubbing by mutableStateOf(false)
+    private var scrubFraction by mutableStateOf(0f)
+
+    private var showAddFeed by mutableStateOf(false)
+    private var feedUrlField by mutableStateOf("")
 
     private var serverField by mutableStateOf("")
     private var usernameField by mutableStateOf("")
@@ -202,20 +216,29 @@ class MainActivity : ComponentActivity() {
         rows = emptyList()
         canGoUp = stack.size > 1
         screenTitle = title
+        currentMediaId = mediaId
+        statusMessage = "Loading…"
 
-        val future = browser.getChildren(mediaId, 0, Int.MAX_VALUE, null)
+        val future = browser.getChildren(mediaId, 0, PAGE_SIZE, null)
         future.addListener(
             {
-                val children = try {
-                    future.get().value ?: emptyList()
+                val result = try {
+                    future.get()
                 } catch (e: Exception) {
-                    Toast.makeText(this, "Couldn't reach the server", Toast.LENGTH_LONG).show()
+                    statusMessage = "Request failed: ${e.javaClass.simpleName}: ${e.message}"
                     return@addListener
                 }
-                if (stack.isNotEmpty() && stack.last().first == mediaId) {
-                    rows = children
-                    if (children.isEmpty()) {
-                        Toast.makeText(this, "Nothing here", Toast.LENGTH_SHORT).show()
+                if (stack.isEmpty() || stack.last().first != mediaId) return@addListener
+
+                val children = result.value
+                when {
+                    children == null ->
+                        statusMessage = "Browse error, result code ${result.resultCode}"
+                    children.isEmpty() ->
+                        statusMessage = "No items returned for $mediaId"
+                    else -> {
+                        rows = children
+                        statusMessage = ""
                     }
                 }
             },
@@ -223,15 +246,44 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /** Feeds are fetched here rather than in the service, so the store is
+     *  written by one side only and the list simply reloads afterwards. */
+    private fun addFeed(url: String) {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return
+        statusMessage = "Fetching feed…"
+        showAddFeed = false
+        feedUrlField = ""
+
+        Thread {
+            val message = try {
+                val feed = PodcastFeed.fetch(trimmed)
+                PodcastStore(this).save(feed)
+                "Added ${feed.title}"
+            } catch (e: Exception) {
+                "Couldn't add feed: ${e.javaClass.simpleName}: ${e.message}"
+            }
+            runOnUiThread {
+                statusMessage = message
+                loadCurrent()
+            }
+        }.start()
+    }
+
     private fun onRowTapped(item: MediaItem) {
         val mediaId = item.mediaId
         if (mediaId.isEmpty()) return
+        val meta = item.mediaMetadata
 
-        if (item.mediaMetadata.isBrowsable == true) {
-            stack.add(mediaId to (item.mediaMetadata.title?.toString() ?: ""))
-            loadCurrent()
-        } else {
-            play(item)
+        when {
+            meta.isBrowsable == true -> {
+                stack.add(mediaId to (meta.title?.toString() ?: ""))
+                loadCurrent()
+            }
+            meta.isPlayable == true -> play(item)
+            // Notice rows carry neither flag, and neither would an item whose
+            // metadata failed to survive the trip from the service
+            else -> Unit
         }
     }
 
@@ -404,7 +456,31 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 },
+                actions = {
+                    if (currentMediaId == MusicService.CAT_PODCASTS) {
+                        TextMMD(
+                            text = if (showAddFeed) "Close" else "Add",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier
+                                .clickable { showAddFeed = !showAddFeed }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        )
+                    }
+                },
             )
+
+            if (showAddFeed) AddFeedPanel()
+
+            if (statusMessage.isNotEmpty()) {
+                TextMMD(
+                    text = statusMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+                HorizontalDividerMMD()
+            }
 
             LazyColumnMMD(
                 modifier = Modifier
@@ -486,6 +562,31 @@ class MainActivity : ComponentActivity() {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+
+                // Scrubbing updates only local state; the seek happens on
+                // release, so dragging costs one E-Ink refresh rather than one
+                // per pixel.
+                if (durationMs > 0L) {
+                    Spacer(Modifier.height(8.dp))
+                    SliderMMD(
+                        value = if (scrubbing) {
+                            scrubFraction
+                        } else {
+                            (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                        },
+                        onValueChange = {
+                            scrubbing = true
+                            scrubFraction = it
+                        },
+                        onValueChangeFinished = {
+                            browser?.seekTo((scrubFraction * durationMs).toLong())
+                            scrubbing = false
+                            refreshPosition()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
                 Spacer(Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -511,6 +612,35 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    private fun AddFeedPanel() {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(white)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            TextFieldMMD(
+                value = feedUrlField,
+                onValueChange = { feedUrlField = it },
+                label = { TextMMD("Feed URL", style = MaterialTheme.typography.labelMedium) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+            ButtonMMD(
+                onClick = { addFeed(feedUrlField) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 48.dp),
+            ) {
+                TextMMD("Subscribe")
+            }
+        }
+        HorizontalDividerMMD()
     }
 
     /**

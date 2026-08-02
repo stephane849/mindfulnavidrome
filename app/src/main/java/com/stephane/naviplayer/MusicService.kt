@@ -67,17 +67,23 @@ class MusicService : MediaLibraryService() {
         const val CAT_ARTISTS = "cat/artists"
         const val CAT_ALBUMS = "cat/albums"
         const val CAT_PLAYLISTS = "cat/playlists"
+        const val CAT_PODCASTS = "cat/podcasts"
 
         const val PREFIX_ARTIST = "artist/"
         const val PREFIX_ALBUM = "album/"
         const val PREFIX_PLAYLIST = "playlist/"
+        const val PREFIX_PODCAST = "podcast/"
         const val PREFIX_TRACK = "track/"
+
+        /** Whole lists cross a Binder transaction, which caps out around 1MB. */
+        private const val MAX_ITEMS = 300
     }
 
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private lateinit var api: NavidromeApi
     private lateinit var resume: ResumeStore
+    private lateinit var podcasts: PodcastStore
 
     private val handler = Handler(Looper.getMainLooper())
     private val browseExecutor: ListeningExecutorService =
@@ -102,6 +108,7 @@ class MusicService : MediaLibraryService() {
         super.onCreate()
         api = NavidromeApi(this)
         resume = ResumeStore(this)
+        podcasts = PodcastStore(this)
 
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("NaviPlayer")
@@ -280,6 +287,29 @@ class MusicService : MediaLibraryService() {
     /** track/<container>/<songId> - the song id is everything after the last slash. */
     private fun songIdOf(mediaId: String): String = mediaId.substringAfterLast('/')
 
+    /**
+     * Podcast episodes are hosted by whoever publishes the feed, so only
+     * Navidrome tracks go through the Subsonic stream endpoint.
+     */
+    private fun streamUriFor(mediaId: String): String? {
+        if (!mediaId.startsWith(PREFIX_TRACK)) return null
+        val rest = mediaId.removePrefix(PREFIX_TRACK)
+        val slash = rest.lastIndexOf('/')
+        if (slash <= 0) return null
+
+        val container = rest.substring(0, slash)
+        val itemId = rest.substring(slash + 1)
+
+        return if (container.startsWith(PREFIX_PODCAST)) {
+            podcasts.feed(container.removePrefix(PREFIX_PODCAST))
+                ?.episodes
+                ?.firstOrNull { it.id == itemId }
+                ?.url
+        } else {
+            api.streamUrl(itemId)
+        }
+    }
+
     // ---------- Browse tree ----------
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
@@ -326,23 +356,45 @@ class MusicService : MediaLibraryService() {
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> {
             val resolved = mediaItems.mapTo(mutableListOf()) { item ->
-                if (item.localConfiguration != null) {
-                    item
-                } else {
-                    item.buildUpon()
-                        .setUri(api.streamUrl(songIdOf(item.mediaId)))
-                        .build()
-                }
+                val uri = if (item.localConfiguration != null) null else streamUriFor(item.mediaId)
+                if (uri == null) item else item.buildUpon().setUri(uri).build()
             }
             return Futures.immediateFuture(resolved)
         }
     }
 
     private fun childrenOf(parentId: String): List<MediaItem> {
-        if (!api.isConfigured()) return emptyList()
+        // Podcasts come from their own hosts, so they work with no server at all
+        val needsServer = parentId != MEDIA_ID_ROOT &&
+            parentId != CAT_PODCASTS &&
+            !parentId.startsWith(PREFIX_PODCAST)
+        if (needsServer && !api.isConfigured()) {
+            return noticeList("Not connected", "Enter your server details")
+        }
 
         return try {
+            val items = loadChildren(parentId)
             when {
+                items.isEmpty() ->
+                    noticeList("Empty list", "The server returned no items for $parentId")
+                items.size > MAX_ITEMS ->
+                    items.take(MAX_ITEMS) +
+                        noticeItem("Showing first $MAX_ITEMS", "${items.size} items in total")
+                else -> items
+            }
+        } catch (e: Exception) {
+            // Surfaced as a row rather than swallowed: an empty list told us
+            // nothing at all when this failed on a real device.
+            Log.e(TAG, "could not load children of $parentId", e)
+            noticeList(
+                "Couldn't load this list",
+                "${e.javaClass.simpleName}: ${e.message ?: "no detail"}",
+            )
+        }
+    }
+
+    private fun loadChildren(parentId: String): List<MediaItem> =
+        when {
                 parentId == MEDIA_ID_ROOT -> rootItems()
 
                 parentId == CAT_ARTISTS -> api.getArtists().map { artist ->
@@ -359,6 +411,36 @@ class MusicService : MediaLibraryService() {
                         album.name,
                         albumSubtitleWithArtist(album),
                     )
+                }
+
+                parentId == CAT_PODCASTS -> podcasts.feeds().map { feed ->
+                    browsableItem(
+                        PREFIX_PODCAST + feed.id,
+                        feed.title,
+                        plural(feed.episodes.size, "episode", "episodes"),
+                    )
+                }
+
+                // Opening a feed refreshes it; the cached copy is the fallback
+                // so a flaky connection still shows what you already had.
+                parentId.startsWith(PREFIX_PODCAST) -> {
+                    val feedId = parentId.removePrefix(PREFIX_PODCAST)
+                    val cached = podcasts.feed(feedId)
+                    val feed = try {
+                        cached?.url?.takeIf { it.isNotEmpty() }
+                            ?.let { PodcastFeed.fetch(it).also { fresh -> podcasts.save(fresh) } }
+                            ?: cached
+                    } catch (e: Exception) {
+                        Log.w(TAG, "refresh failed for $feedId, using cache", e)
+                        cached
+                    }
+                    feed?.episodes.orEmpty().map { episode ->
+                        playableItem(
+                            trackId(parentId, episode.id),
+                            episode.title,
+                            episodeSubtitle(episode),
+                        )
+                    }
                 }
 
                 parentId == CAT_PLAYLISTS -> api.getPlaylists().map { playlist ->
@@ -385,13 +467,27 @@ class MusicService : MediaLibraryService() {
                     }
                 }
 
-                else -> emptyList()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "could not load children of $parentId", e)
-            emptyList()
+            else -> emptyList()
         }
-    }
+
+    private fun noticeList(title: String, detail: String) = listOf(noticeItem(title, detail))
+
+    /**
+     * A row that exists only to say something to the reader. Neither browsable
+     * nor playable, so tapping it does nothing.
+     */
+    private fun noticeItem(title: String, detail: String) =
+        MediaItem.Builder()
+            .setMediaId("notice/${title.hashCode()}")
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(title)
+                    .setSubtitle(detail)
+                    .setIsBrowsable(false)
+                    .setIsPlayable(false)
+                    .build()
+            )
+            .build()
 
     /** The mode picker, plus a way straight back into whatever was last playing. */
     private fun rootItems(): List<MediaItem> {
@@ -412,7 +508,26 @@ class MusicService : MediaLibraryService() {
         items.add(browsableItem(CAT_ARTISTS, "Artists", "Browse by artist"))
         items.add(browsableItem(CAT_ALBUMS, "Albums", "Every album"))
         items.add(browsableItem(CAT_PLAYLISTS, "Playlists", "Your Navidrome playlists"))
+        items.add(
+            browsableItem(
+                CAT_PODCASTS,
+                "Podcasts",
+                plural(podcasts.feeds().size, "subscription", "subscriptions"),
+            )
+        )
         return items
+    }
+
+    private fun episodeSubtitle(episode: Episode): String {
+        val total = formatClock(episode.durationSec)
+        val saved = resume.position(episode.id)
+        val time = when {
+            saved > 0L && total.isNotEmpty() -> "${formatClockMs(saved)} of $total"
+            saved > 0L -> formatClockMs(saved)
+            else -> total
+        }
+        val date = episode.published.take(16)
+        return listOf(date, time).filter { it.isNotEmpty() }.joinToString(" - ")
     }
 
     /** Albums and playlists both resolve to a track list; the cache spans both. */
