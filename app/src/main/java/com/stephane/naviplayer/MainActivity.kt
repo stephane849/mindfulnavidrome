@@ -118,6 +118,15 @@ class MainActivity : ComponentActivity() {
         /** Both title-bar side slots, equal so the title centres on the screen. */
         private val BAR_SLOT = 76.dp
 
+        /** How far the -15 and +15 controls move. */
+        private const val SEEK_STEP_MS = 15_000L
+
+        /**
+         * Past this, Back restarts what is playing instead of stepping to the
+         * previous item - the convention every long-form player follows.
+         */
+        private const val RESTART_THRESHOLD_MS = 3_000L
+
         private val SPEEDS = listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
         private val SLEEP_MINUTES = listOf(0, 15, 30, 45, 60)
     }
@@ -780,6 +789,54 @@ class MainActivity : ComponentActivity() {
         if (browser.isPlaying) browser.pause() else browser.play()
     }
 
+    /**
+     * Moves by a fixed step, computed here rather than left to seekBack and
+     * seekForward.
+     *
+     * Those seek by an increment configured on the player in the service, which
+     * a controller only learns about second-hand - and if it does not arrive,
+     * the button silently does nothing, which is what was happening. An explicit
+     * seekTo cannot be wrong about how far to go.
+     */
+    private fun nudge(deltaMs: Long) {
+        val browser = this.browser ?: return
+        val duration = browser.duration
+        var target = browser.currentPosition + deltaMs
+        target = target.coerceAtLeast(0L)
+        if (duration != C.TIME_UNSET && duration > 0L) {
+            target = target.coerceAtMost(duration)
+        }
+        browser.seekTo(target)
+        refreshPosition()
+    }
+
+    /**
+     * Back to the start of what is playing, and only to the previous item if
+     * you are already at the start.
+     *
+     * It used to call seekToPreviousMediaItem, which steps an item every time
+     * and does nothing at all when there is no previous one - so on a single
+     * lecture, the commonest case here, the button was inert. Restarting is what
+     * you want from Back forty minutes into a talk anyway.
+     */
+    private fun previous() {
+        val browser = this.browser ?: return
+        if (browser.currentPosition > RESTART_THRESHOLD_MS || !browser.hasPreviousMediaItem()) {
+            browser.seekTo(0L)
+        } else {
+            browser.seekToPreviousMediaItem()
+        }
+        refreshPosition()
+    }
+
+    private fun next() {
+        val browser = this.browser ?: return
+        if (browser.hasNextMediaItem()) {
+            browser.seekToNextMediaItem()
+            refreshPosition()
+        }
+    }
+
     private fun cycleSpeed() {
         val browser = this.browser ?: return
         val next = SPEEDS[(SPEEDS.indexOfFirst { it == speed }.takeIf { it >= 0 }
@@ -1406,10 +1463,10 @@ class MainActivity : ComponentActivity() {
                         label = "Previous",
                         modifier = Modifier.weight(1f),
                         minHeight = 56.dp,
-                    ) { browser?.seekToPreviousMediaItem() }
+                    ) { previous() }
 
                     LabelAction("-15", Modifier.weight(1f), minHeight = 56.dp) {
-                        browser?.seekBack()
+                        nudge(-SEEK_STEP_MS)
                     }
 
                     IconAction(
@@ -1421,7 +1478,7 @@ class MainActivity : ComponentActivity() {
                     ) { togglePlayPause() }
 
                     LabelAction("+15", Modifier.weight(1f), minHeight = 56.dp) {
-                        browser?.seekForward()
+                        nudge(SEEK_STEP_MS)
                     }
 
                     IconAction(
@@ -1429,7 +1486,7 @@ class MainActivity : ComponentActivity() {
                         label = "Next",
                         modifier = Modifier.weight(1f),
                         minHeight = 56.dp,
-                    ) { browser?.seekToNextMediaItem() }
+                    ) { next() }
                 }
 
                 Spacer(Modifier.height(20.dp))
