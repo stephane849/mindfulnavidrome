@@ -45,7 +45,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -79,7 +78,6 @@ import com.mudita.mmd.components.bottom_sheet.rememberModalBottomSheetMMDState
 import com.mudita.mmd.components.nav_bar.NavigationBarMMD
 import com.mudita.mmd.components.progress_indicator.LinearProgressIndicatorMMD
 import com.mudita.mmd.components.snackbar.SnackbarMMD
-import com.mudita.mmd.components.slider.SliderMMD
 import com.mudita.mmd.components.text.TextMMD
 import com.mudita.mmd.components.text_field.TextFieldMMD
 import com.mudita.mmd.white
@@ -1337,12 +1335,18 @@ class MainActivity : ComponentActivity() {
                 start = { BarAction("Close") { showNowPlaying = false } },
             )
 
-            // Deliberately not scrollable: everything is sized to fit, so the
-            // controls are always where you left them
+            // Sized to fit, and scrollable anyway. It used to be neither: two
+            // weighted spacers held the controls apart on the assumption that
+            // everything fitted, and a Column that runs out of height measures
+            // what is left over into nothing rather than overflowing - so a
+            // control did not move down off the screen, it silently ceased to
+            // be drawn. On a screen this small that assumption is not one to
+            // keep making.
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 16.dp),
             ) {
                 // Where you are in the run. Both numbers were already in state
@@ -1372,7 +1376,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.height(24.dp))
 
                 if (isRadio) {
                     // Nothing to scrub and nothing to count down to. The clock
@@ -1390,50 +1394,47 @@ class MainActivity : ComponentActivity() {
                             textAlign = TextAlign.End,
                         )
                     }
-                } else if (durationMs > 0L) {
-                    SliderMMD(
-                        value = if (scrubbing) {
-                            scrubFraction
-                        } else {
-                            (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+                } else {
+                    // The rail is drawn whether or not the length is known yet.
+                    // It used to appear only once a duration arrived, so a track
+                    // still being measured showed no seek line at all, and there
+                    // was no way to tell that from the line having gone missing.
+                    val known = durationMs > 0L
+                    Scrubber(
+                        fraction = when {
+                            scrubbing -> scrubFraction
+                            known -> positionMs.toFloat() / durationMs
+                            else -> 0f
                         },
-                        onValueChange = {
+                        enabled = known,
+                        onScrub = {
                             scrubbing = true
                             scrubFraction = it
                         },
-                        onValueChangeFinished = {
+                        onScrubFinished = {
                             browser?.seekTo((scrubFraction * durationMs).toLong())
                             scrubbing = false
                             refreshPosition()
                         },
-                        // A square on its corner, because a round handle at this
-                        // size dithers into a smudge and stops reading as a thing
-                        // you can take hold of.
-                        thumb = {
-                            Box(
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .rotate(45f)
-                                    .background(black),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
                     Row(modifier = Modifier.fillMaxWidth()) {
                         TextMMD(
                             text = formatClockMs(positionMs),
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelSmall.chrome(),
                             modifier = Modifier.weight(1f),
                         )
                         TextMMD(
-                            text = "-${formatClockMs((durationMs - positionMs).coerceAtLeast(0L))}",
-                            style = MaterialTheme.typography.labelSmall,
+                            text = when {
+                                known ->
+                                    "-${formatClockMs((durationMs - positionMs).coerceAtLeast(0L))}"
+                                isBuffering -> "Loading"
+                                else -> "--:--"
+                            },
+                            style = MaterialTheme.typography.labelSmall.chrome(),
                             textAlign = TextAlign.End,
                         )
                     }
-                } else if (isBuffering) {
-                    TextMMD("Loading", style = MaterialTheme.typography.bodySmall)
                 }
 
                 Spacer(Modifier.height(20.dp))
@@ -1510,7 +1511,7 @@ class MainActivity : ComponentActivity() {
                 // The queue has its own destination in the bottom bar, so a
                 // button for it here only pushed the screen past its height
 
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.height(16.dp))
             }
         }
     }

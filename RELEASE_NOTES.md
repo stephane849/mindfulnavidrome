@@ -72,3 +72,7 @@ design system Mudita publishes for its own E-Ink devices:
 - 3dp dividers rather than hairlines, which alias badly on E-Ink
 - Bottom navigation across Library, Podcasts, Queue and Search, a mini player
   that only exists when something is loaded, and a full Now Playing screen
+- A hand-drawn seek line: an outlined rail filled to a diamond playhead, at a
+  fixed height so it is always there. Several MMD components assume a roomier
+  phone than this one, so the title bar, the tab row, the bottom navigation and
+  now the scrubber are drawn here instead
