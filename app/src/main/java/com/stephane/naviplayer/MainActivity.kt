@@ -2,12 +2,16 @@ package com.stephane.naviplayer
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -129,6 +133,9 @@ class MainActivity : ComponentActivity() {
 
         private val SPEEDS = listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
         private val SLEEP_MINUTES = listOf(0, 15, 30, 45, 60)
+
+        /** Whether the battery optimization exemption dialog has been asked. */
+        private const val KEY_ASKED_BATTERY_EXEMPTION = "asked_battery_exemption"
     }
 
     private var browserFuture: ListenableFuture<MediaBrowser>? = null
@@ -287,6 +294,7 @@ class MainActivity : ComponentActivity() {
         api = NavidromeApi(this)
         resume = ResumeStore(this)
         requestNotificationPermissionIfNeeded()
+        requestBatteryOptimizationExemptionIfNeeded()
 
         if (api.isConfigured()) {
             val prefs = getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE)
@@ -974,13 +982,20 @@ class MainActivity : ComponentActivity() {
         HorizontalDividerMMD()
     }
 
-    /** A bar action: a word you can tap, sized for a thumb. */
+    /**
+     * A bar action: a word you can tap, sized for a thumb.
+     *
+     * Ellipsised rather than clipped - the slot beside it is a fixed 76dp and
+     * most labels here are one short word, but a longer one (Sign out) should
+     * degrade to "SIGN O..." rather than lose letters off a hard edge.
+     */
     @Composable
     private fun BarAction(label: String, onClick: () -> Unit) {
         TextMMD(
             text = label.uppercase(),
             style = MaterialTheme.typography.labelMedium.chrome(),
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .clickable { onClick() }
                 .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -1006,6 +1021,10 @@ class MainActivity : ComponentActivity() {
                         // A station needs a name as well as a URL, so it gets
                         // its own form rather than going through Search
                         isRadioTab -> BarAction("Add") { showAddStation = true }
+                        // Sits on the library's own tabs rather than the radio
+                        // one, which already spends this slot on Add
+                        section == Section.LIBRARY && currentStack.isEmpty() && !isRadioTab ->
+                            BarAction("Sign out") { onSignOutClicked() }
                         // How many are lined up, said where the screen names
                         // itself rather than crowded into the bottom bar
                         section == Section.QUEUE && queueCount > 0 -> TextMMD(
@@ -1924,6 +1943,40 @@ class MainActivity : ComponentActivity() {
         if (browser == null) connectBrowser() else loadCurrent()
     }
 
+    /**
+     * Drops the saved credentials and returns to the login screen. Playback
+     * stops first - the loaded stream URLs carry the old account's auth
+     * params, and the queue's media ids are only meaningful against the
+     * server that issued them.
+     */
+    private fun onSignOutClicked() {
+        browser?.let {
+            it.stop()
+            it.clearMediaItems()
+        }
+        QueueStore(this).clear()
+        resume.saveLast("", "")
+
+        getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE).edit()
+            .remove("server")
+            .remove("username")
+            .remove("password")
+            .apply()
+
+        browseCache.clear()
+        stacks.values.forEach { it.clear() }
+        section = Section.LIBRARY
+        libraryTab = 0
+        rows = emptyList()
+
+        serverField = ""
+        usernameField = ""
+        passwordField = ""
+        bitrateField = NavidromeApi.DEFAULT_BITRATE.toString()
+        loginStatus = ""
+        showLogin = true
+    }
+
     @Composable
     private fun LoginScreen() {
         Column(
@@ -2003,6 +2056,32 @@ class MainActivity : ComponentActivity() {
             PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+    }
+
+    /**
+     * OEM battery managers - ASUS DuraSpeed among them - kill background apps
+     * on their own schedule, foreground service or not, unless the app is
+     * exempted from battery optimization. This asks once; if the user declines
+     * the system dialog, nagging them again on every launch would be worse
+     * than the problem it is trying to fix.
+     */
+    private fun requestBatteryOptimizationExemptionIfNeeded() {
+        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager ?: return
+        if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
+
+        val prefs = getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_ASKED_BATTERY_EXEMPTION, false)) return
+        prefs.edit().putBoolean(KEY_ASKED_BATTERY_EXEMPTION, true).apply()
+
+        try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            )
+        } catch (e: Exception) {
+            // Some OEM builds strip this intent entirely; nothing to fall back to
         }
     }
 }
