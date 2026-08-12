@@ -212,6 +212,8 @@ class MainActivity : ComponentActivity() {
     private var stationNameField by mutableStateOf("")
     private var stationUrlField by mutableStateOf("")
 
+    private var showSignOutConfirm by mutableStateOf(false)
+
     /** Deleting a station removes it from the server, so it takes two taps. */
     private var deleteArmed by mutableStateOf(false)
 
@@ -985,9 +987,9 @@ class MainActivity : ComponentActivity() {
     /**
      * A bar action: a word you can tap, sized for a thumb.
      *
-     * Ellipsised rather than clipped - the slot beside it is a fixed 76dp and
-     * most labels here are one short word, but a longer one (Sign out) should
-     * degrade to "SIGN O..." rather than lose letters off a hard edge.
+     * Ellipsised rather than clipped - the slot beside it is a fixed 76dp, and
+     * a word that runs long should degrade gracefully rather than lose
+     * letters off a hard edge.
      */
     @Composable
     private fun BarAction(label: String, onClick: () -> Unit) {
@@ -1000,6 +1002,23 @@ class MainActivity : ComponentActivity() {
                 .clickable { onClick() }
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         )
+    }
+
+    /** A bar action rendered as an icon instead of a word, same footprint as [BarAction]. */
+    @Composable
+    private fun BarIconAction(icon: Int, label: String, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier
+                .clickable { onClick() }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Icon(
+                painter = painterResource(icon),
+                contentDescription = label,
+                tint = black,
+                modifier = Modifier.size(22.dp),
+            )
+        }
     }
 
     @Composable
@@ -1024,7 +1043,9 @@ class MainActivity : ComponentActivity() {
                         // Sits on the library's own tabs rather than the radio
                         // one, which already spends this slot on Add
                         section == Section.LIBRARY && currentStack.isEmpty() && !isRadioTab ->
-                            BarAction("Sign out") { onSignOutClicked() }
+                            BarIconAction(R.drawable.ic_logout, "Sign out") {
+                                showSignOutConfirm = true
+                            }
                         // How many are lined up, said where the screen names
                         // itself rather than crowded into the bottom bar
                         section == Section.QUEUE && queueCount > 0 -> TextMMD(
@@ -1089,6 +1110,7 @@ class MainActivity : ComponentActivity() {
         // Sheets rather than inline panels, which used to shove the list around
         actionTarget?.let { QueueActionsSheet(it) }
         if (showAddStation) AddStationSheet()
+        if (showSignOutConfirm) SignOutConfirmSheet()
     }
 
     @Composable
@@ -1734,6 +1756,40 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun SignOutConfirmSheet() {
+        ModalBottomSheetMMD(
+            onDismissRequest = { showSignOutConfirm = false },
+            sheetState = rememberModalBottomSheetMMDState(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                TextMMD("Sign out?", style = MaterialTheme.typography.bodyMedium.strong())
+                Spacer(Modifier.height(4.dp))
+                TextMMD(
+                    "Playback stops and the queue clears. Server and username stay " +
+                        "filled in for next time.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SmallAction("Cancel", Modifier.weight(1f)) { showSignOutConfirm = false }
+                    SmallAction("Sign out", Modifier.weight(1f)) {
+                        showSignOutConfirm = false
+                        onSignOutClicked()
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+
+    @Composable
     private fun SearchScreen() {
         Column(modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -1944,10 +2000,15 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Drops the saved credentials and returns to the login screen. Playback
+     * Drops the saved password and returns to the login screen. Playback
      * stops first - the loaded stream URLs carry the old account's auth
      * params, and the queue's media ids are only meaningful against the
      * server that issued them.
+     *
+     * Server and username are left in place, both in prefs and in the login
+     * fields: they name where and who you are, not a secret, and retyping a
+     * server URL for the one account this device ever connects to is friction
+     * signing out should not add.
      */
     private fun onSignOutClicked() {
         browser?.let {
@@ -1958,8 +2019,6 @@ class MainActivity : ComponentActivity() {
         resume.saveLast("", "")
 
         getSharedPreferences(NavidromeApi.PREFS, MODE_PRIVATE).edit()
-            .remove("server")
-            .remove("username")
             .remove("password")
             .apply()
 
@@ -1969,10 +2028,7 @@ class MainActivity : ComponentActivity() {
         libraryTab = 0
         rows = emptyList()
 
-        serverField = ""
-        usernameField = ""
         passwordField = ""
-        bitrateField = NavidromeApi.DEFAULT_BITRATE.toString()
         loginStatus = ""
         showLogin = true
     }

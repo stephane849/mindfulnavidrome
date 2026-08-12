@@ -15,8 +15,8 @@ android {
         applicationId "com.stephane.naviplayer"
         minSdk 24
         targetSdk 34
-        versionCode 19
-        versionName "4.5"
+        versionCode 20
+        versionName "4.6"
     }
 
     buildFeatures {
