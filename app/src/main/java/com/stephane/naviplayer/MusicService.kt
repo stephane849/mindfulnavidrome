@@ -114,6 +114,7 @@ class MusicService : MediaLibraryService() {
         const val ARG_QUEUE_MEDIA_ID = "media_id"
         const val ARG_QUEUE_TITLE = "title"
         const val ARG_QUEUE_SUBTITLE = "subtitle"
+        const val ARG_QUEUE_DURATION_MS = "duration_ms"
 
         const val OP_QUEUE_PLAY = "play"
         const val OP_QUEUE_MOVE = "move"
@@ -299,6 +300,7 @@ class MusicService : MediaLibraryService() {
                             .setSubtitle(entry.subtitle)
                             .setIsBrowsable(false)
                             .setIsPlayable(true)
+                            .apply { if (entry.durationMs > 0L) setDurationMs(entry.durationMs) }
                             .build()
                     )
                     .build()
@@ -342,6 +344,7 @@ class MusicService : MediaLibraryService() {
                 mediaId = item.mediaId,
                 title = item.mediaMetadata.title?.toString() ?: "",
                 subtitle = item.mediaMetadata.subtitle?.toString() ?: "",
+                durationMs = item.mediaMetadata.durationMs ?: 0L,
             )
         }
         queueSnapshot = entries
@@ -401,7 +404,11 @@ class MusicService : MediaLibraryService() {
             // Whatever the last station was announcing does not describe this
             publishStreamTitle("")
             mediaItem?.let {
-                resume.saveLast(it.mediaId, it.mediaMetadata.title?.toString() ?: "")
+                resume.saveLast(
+                    it.mediaId,
+                    it.mediaMetadata.title?.toString() ?: "",
+                    it.mediaMetadata.durationMs ?: 0L,
+                )
             }
             // Auto-advancing between tracks leaves the player in STATE_READY
             // throughout, so onPlaybackStateChanged never fires and the resume
@@ -480,8 +487,8 @@ class MusicService : MediaLibraryService() {
         val saved = resume.position(songIdOf(mediaId))
         if (saved <= 0L) return
 
-        val total = player.duration
-        if (total == C.TIME_UNSET || saved < total - ResumeStore.END_SLACK_MS) {
+        val total = player.durationOrMetadataMs()
+        if (total <= 0L || saved < total - ResumeStore.END_SLACK_MS) {
             player.seekTo(saved)
         }
     }
@@ -498,14 +505,16 @@ class MusicService : MediaLibraryService() {
     }
 
     private fun savePosition() {
-        val mediaId = player.currentMediaItem?.mediaId ?: return
+        val item = player.currentMediaItem ?: return
+        val mediaId = item.mediaId
         if (isRadio(mediaId)) return
-        val total = player.duration
-        resume.save(
-            songIdOf(mediaId),
-            player.currentPosition,
-            if (total == C.TIME_UNSET) 0L else total,
-        )
+        val total = player.durationOrMetadataMs()
+        resume.save(songIdOf(mediaId), player.currentPosition, total)
+        // Refreshes "Continue listening" with a duration learned after the
+        // track started, which is the common case for a headerless stream.
+        if (total > 0L) {
+            resume.saveLast(mediaId, item.mediaMetadata.title?.toString() ?: "", total)
+        }
     }
 
     /** track/<container>/<songId> - the song id is everything after the last slash. */
@@ -618,6 +627,7 @@ class MusicService : MediaLibraryService() {
                     .setSubtitle(entry.subtitle)
                     .setIsBrowsable(false)
                     .setIsPlayable(true)
+                    .apply { if (entry.durationMs > 0L) setDurationMs(entry.durationMs) }
                     .build()
             )
             .build()
@@ -714,6 +724,7 @@ class MusicService : MediaLibraryService() {
                             mediaId = mediaId,
                             title = args.getString(ARG_QUEUE_TITLE).orEmpty(),
                             subtitle = args.getString(ARG_QUEUE_SUBTITLE).orEmpty(),
+                            durationMs = args.getLong(ARG_QUEUE_DURATION_MS, 0L),
                         )
                     },
                 )
@@ -842,6 +853,7 @@ class MusicService : MediaLibraryService() {
                         PREFIX_QUEUE + index,
                         entry.title.ifEmpty { "Untitled" },
                         entry.subtitle,
+                        durationMs = entry.durationMs,
                     )
                 }
 
@@ -873,6 +885,7 @@ class MusicService : MediaLibraryService() {
                             episodeSubtitle(episode),
                             progressOf(episode.id, episode.durationSec),
                             resume.isPlayed(episode.id),
+                            episode.durationSec * 1000L,
                         )
                     }
                 }
@@ -912,6 +925,7 @@ class MusicService : MediaLibraryService() {
                             trackSubtitle(song, showArtist),
                             progressOf(song.id, song.duration),
                             resume.isPlayed(song.id),
+                            song.duration * 1000L,
                         )
                     }
                 }
@@ -962,7 +976,14 @@ class MusicService : MediaLibraryService() {
             } else {
                 title
             }
-            items.add(playableItem(lastId, "Continue listening", subtitle))
+            items.add(
+                playableItem(
+                    lastId,
+                    "Continue listening",
+                    subtitle,
+                    durationMs = resume.lastDurationMs(),
+                )
+            )
         }
 
         val queued = queueSnapshot
@@ -1066,6 +1087,13 @@ class MusicService : MediaLibraryService() {
     /**
      * Progress and played state travel in the metadata extras so the list can
      * draw a progress bar and filter episodes without asking the service again.
+     *
+     * durationMs rides on the metadata too, for the same reason it is threaded
+     * through the queue and the custom queue-edit command: a headerless,
+     * chunked-transcoded MP3 - this app's whole reason to exist - routinely
+     * never gives ExoPlayer's own duration a value, and without a fallback the
+     * seek bar and resume saving both silently stay off. Zero means unknown,
+     * which is the case for radio and anything saved before this existed.
      */
     private fun playableItem(
         id: String,
@@ -1073,6 +1101,7 @@ class MusicService : MediaLibraryService() {
         subtitle: String,
         progress: Float = 0f,
         played: Boolean = false,
+        durationMs: Long = 0L,
     ) = MediaItem.Builder()
         .setMediaId(id)
         .setMediaMetadata(
@@ -1081,6 +1110,7 @@ class MusicService : MediaLibraryService() {
                 .setSubtitle(subtitle)
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
+                .apply { if (durationMs > 0L) setDurationMs(durationMs) }
                 .setExtras(
                     Bundle().apply {
                         putFloat(EXTRA_PROGRESS, progress)

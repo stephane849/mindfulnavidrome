@@ -1,6 +1,8 @@
 package com.stephane.naviplayer
 
 import android.content.Context
+import androidx.media3.common.C
+import androidx.media3.common.Player
 import java.util.Locale
 
 /**
@@ -30,6 +32,7 @@ class ResumeStore(context: Context) {
         private const val PLAYED_PREFIX = "played_"
         private const val KEY_LAST_ID = "last_media_id"
         private const val KEY_LAST_TITLE = "last_title"
+        private const val KEY_LAST_DURATION = "last_duration_ms"
         private const val KEY_STACK = "browse_stack"
 
         private const val UNIT_SEPARATOR = "\u0001"
@@ -78,16 +81,19 @@ class ResumeStore(context: Context) {
 
     // ---------- Last played, for the "Continue listening" row ----------
 
-    fun saveLast(mediaId: String, title: String) {
+    fun saveLast(mediaId: String, title: String, durationMs: Long = 0L) {
         prefs.edit()
             .putString(KEY_LAST_ID, mediaId)
             .putString(KEY_LAST_TITLE, title)
+            .putLong(KEY_LAST_DURATION, durationMs)
             .apply()
     }
 
     fun lastMediaId(): String = prefs.getString(KEY_LAST_ID, "") ?: ""
 
     fun lastTitle(): String = prefs.getString(KEY_LAST_TITLE, "") ?: ""
+
+    fun lastDurationMs(): Long = prefs.getLong(KEY_LAST_DURATION, 0L)
 
     // ---------- Where you were browsing ----------
 
@@ -123,3 +129,19 @@ fun formatClock(seconds: Int): String {
 }
 
 fun formatClockMs(millis: Long): String = formatClock((millis / 1000).toInt())
+
+/**
+ * The player's own duration when it has one, falling back to whatever the
+ * current item's own metadata claims.
+ *
+ * Headerless, chunked-transcoded MP3 streams - the whole point of this app -
+ * often never give ExoPlayer a real duration at all, even at STATE_READY:
+ * without a Xing header or a known content length there is nothing for it to
+ * compute one from. Without this fallback, both the seek bar and resume
+ * saving stay switched off for exactly the long lectures this app exists for.
+ */
+fun Player.durationOrMetadataMs(): Long {
+    val known = duration
+    if (known != C.TIME_UNSET && known > 0L) return known
+    return currentMediaItem?.mediaMetadata?.durationMs ?: 0L
+}

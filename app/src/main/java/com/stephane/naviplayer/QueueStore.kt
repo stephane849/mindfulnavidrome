@@ -9,6 +9,8 @@ data class QueueEntry(
     val mediaId: String,
     val title: String,
     val subtitle: String,
+    /** 0 when unknown, e.g. an entry saved before this was tracked. */
+    val durationMs: Long = 0L,
 )
 
 data class SavedQueue(
@@ -53,6 +55,7 @@ class QueueStore(context: Context) {
                     .put("mediaId", entry.mediaId)
                     .put("title", entry.title)
                     .put("subtitle", entry.subtitle)
+                    .put("durationMs", entry.durationMs)
             )
         }
 
@@ -84,6 +87,7 @@ class QueueStore(context: Context) {
                         mediaId = mediaId,
                         title = node.optString("title", ""),
                         subtitle = node.optString("subtitle", ""),
+                        durationMs = node.optLong("durationMs", 0L),
                     )
                 }
             }
