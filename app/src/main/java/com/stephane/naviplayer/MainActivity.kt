@@ -347,14 +347,10 @@ class MainActivity : ComponentActivity() {
     private fun savePlaybackState() {
         val browser = this.browser ?: return
         val item = browser.currentMediaItem ?: return
-        val duration = browser.duration
+        val duration = browser.durationOrMetadataMs()
 
-        resume.save(
-            item.mediaId.substringAfterLast('/'),
-            browser.currentPosition,
-            if (duration == C.TIME_UNSET) 0L else duration,
-        )
-        resume.saveLast(item.mediaId, item.mediaMetadata.title?.toString() ?: "")
+        resume.save(item.mediaId.substringAfterLast('/'), browser.currentPosition, duration)
+        resume.saveLast(item.mediaId, item.mediaMetadata.title?.toString() ?: "", duration)
     }
 
     // ---------- Service connection ----------
@@ -404,7 +400,7 @@ class MainActivity : ComponentActivity() {
         } else {
             itemSubtitle
         }
-        durationMs = player.duration.let { if (it == C.TIME_UNSET) 0L else it }
+        durationMs = player.durationOrMetadataMs()
         queueCount = player.mediaItemCount
         queueIndex = player.currentMediaItemIndex.coerceAtLeast(0)
         speed = player.playbackParameters.speed
@@ -599,6 +595,10 @@ class MainActivity : ComponentActivity() {
                     putString(
                         MusicService.ARG_QUEUE_SUBTITLE,
                         it.mediaMetadata.subtitle?.toString() ?: "",
+                    )
+                    putLong(
+                        MusicService.ARG_QUEUE_DURATION_MS,
+                        it.mediaMetadata.durationMs ?: 0L,
                     )
                 }
             },
@@ -810,10 +810,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun nudge(deltaMs: Long) {
         val browser = this.browser ?: return
-        val duration = browser.duration
+        val duration = browser.durationOrMetadataMs()
         var target = browser.currentPosition + deltaMs
         target = target.coerceAtLeast(0L)
-        if (duration != C.TIME_UNSET && duration > 0L) {
+        if (duration > 0L) {
             target = target.coerceAtMost(duration)
         }
         browser.seekTo(target)
